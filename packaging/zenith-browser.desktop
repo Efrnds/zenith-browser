@@ -1,0 +1,18 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Zenith Browser
+GenericName=Web Browser
+Comment=Navegador com abas verticais e workspaces
+Exec=zenith-browser %U
+Icon=zenith-browser
+Terminal=false
+Categories=Network;WebBrowser;
+MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;
+StartupNotify=true
+StartupWMClass=zenith-browser
+Actions=Private;
+
+[Desktop Action Private]
+Name=Nova janela privada
+Exec=zenith-browser --private

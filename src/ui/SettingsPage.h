@@ -15,6 +15,7 @@ class SettingsPage final : public QWidget
 public:
     explicit SettingsPage(QWidget *parent = nullptr);
 
+    void setWorkspaces(const QStringList &names, int current);
     void setSearchTemplate(const QString &value);
     void setCompactMode(bool enabled);
     void setAdBlockEnabled(bool enabled);
@@ -24,6 +25,8 @@ public:
 
 signals:
     void closeRequested();
+    void defaultBrowserRequested();
+    void workspaceActionRequested(int action);
     void searchTemplateChanged(const QString &value);
     void compactModeChanged(bool enabled);
     void adBlockChanged(bool enabled);
@@ -31,14 +34,18 @@ signals:
     void manageCredentialsRequested();
     void suspendOnMinimizeChanged(bool enabled);
     void restoreSessionChanged(bool enabled);
+    void privacyPolicyChanged(bool blockThirdParty, bool trackingPrevention);
+    void reducedMotionChanged(bool enabled);
 
 private:
     QWidget *makeGeneralPage();
     QWidget *makeAppearancePage();
+    QWidget *makeWorkspacesPage();
     QWidget *makePrivacyPage();
     QWidget *makePerformancePage();
     QWidget *makeAboutPage();
 
+    QListWidget *workspaceList_ = nullptr;
     QListWidget *navigation_;
     QStackedWidget *pages_;
     QComboBox *searchEngine_;

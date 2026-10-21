@@ -26,12 +26,16 @@ public:
 signals:
     void activated(int tabId);
     void closeRequested(int tabId);
+    void moveRequested(int sourceId, int targetId);
 
 protected:
     void enterEvent(QEnterEvent *event) override;
     void leaveEvent(QEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
 
 private:
@@ -46,4 +50,5 @@ private:
     bool collapsed_ = false;
     bool active_ = false;
     bool pointerInside_ = false;
+    QPoint dragStart_;
 };

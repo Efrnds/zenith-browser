@@ -8,6 +8,7 @@
 struct CredentialEntry {
     QString origin;
     QString username;
+    bool legacy = false;
 };
 
 struct StoredCredential {
@@ -21,11 +22,11 @@ class CredentialStore
 public:
     [[nodiscard]] bool save(const StoredCredential &credential, QString *error = nullptr);
     [[nodiscard]] std::optional<StoredCredential> lookup(const QString &origin,
-                                                         QString *error = nullptr) const;
-    [[nodiscard]] bool remove(const QString &origin, QString *error = nullptr);
+                                                         QString *error = nullptr, const QString &username = {}) const;
+    [[nodiscard]] bool remove(const QString &origin, QString *error = nullptr, const QString &username = {});
     [[nodiscard]] QList<CredentialEntry> entries() const;
 
 private:
     void updateIndex(const QString &origin, const QString &username);
-    void removeFromIndex(const QString &origin);
+    void removeFromIndex(const QString &origin, const QString &username);
 };

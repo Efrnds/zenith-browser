@@ -1,6 +1,6 @@
 * {
     color: #f4f4f5;
-    font-family: "Inter", "Noto Sans", "Segoe UI", sans-serif;
+    font-family: "Noto Sans", "Segoe UI", sans-serif;
     font-size: 13px;
 }
 
@@ -8,7 +8,33 @@ QMainWindow, QWidget#centralSurface, QWidget#contentSurface {
     background: #121214;
 }
 
-QWidget#sidebar {
+QDialog, QMessageBox {
+    background: #18181b;
+}
+
+QLineEdit, QSpinBox {
+    min-height: 32px;
+    color: #f4f4f5;
+    background: #202023;
+    border: 1px solid #3f3f46;
+    border-radius: 4px;
+    padding: 0 8px;
+    selection-background-color: #5b4fc4;
+}
+
+QAbstractItemView {
+    color: #f4f4f5;
+    background: #121214;
+    alternate-background-color: #18181b;
+    selection-color: #f4f4f5;
+    selection-background-color: #353438;
+}
+
+QDialogButtonBox QPushButton {
+    border: 1px solid #3f3f46;
+}
+
+QWidget#sidebar, QWidget#sidebarBody {
     background: #18181b;
     border-right: 1px solid #27272a;
 }
@@ -19,8 +45,8 @@ QWidget#revealStrip {
 
 QLabel#brandLabel {
     color: #fafafa;
-    font-size: 14px;
-    font-weight: 700;
+    font-size: 19px;
+    font-weight: 600;
 }
 
 QLabel#sectionLabel {
@@ -48,7 +74,7 @@ QPushButton:pressed, QToolButton:pressed {
     background: #27272a;
 }
 
-QPushButton:focus, QToolButton:focus, QLineEdit:focus, QListWidget:focus {
+QPushButton:focus, QToolButton:focus, QLineEdit:focus, QListWidget:focus, QComboBox:focus, QSpinBox:focus, QCheckBox:focus {
     border: 1px solid #8b7cf6;
 }
 
@@ -65,15 +91,18 @@ QPushButton#workspaceButton {
 }
 
 QPushButton#newTabButton {
-    color: #ffffff;
-    background: #27272a;
-    border-color: #3f3f46;
-    font-weight: 600;
+    text-align: left;
+    padding-left: 12px;
+    color: #a1a1aa;
+    background: transparent;
+    border-color: transparent;
+    font-weight: 400;
 }
 
 QPushButton#newTabButton:hover {
-    background: #323236;
-    border-color: #52525b;
+    color: #f4f4f5;
+    background: #202023;
+    border-color: transparent;
 }
 
 QListWidget#tabList {
@@ -188,7 +217,7 @@ QWidget#urlBar {
 QWidget#addressSurface {
     background: #1c1c1f;
     border: 1px solid #323238;
-    border-radius: 10px;
+    border-radius: 8px;
 }
 
 QWidget#addressSurface[focused="true"] {
@@ -203,9 +232,13 @@ QWidget#urlBar QToolButton {
     padding: 0;
 }
 
-QLabel#securityIndicator {
+QToolButton#securityIndicator {
     color: #a1a1aa;
-    padding-left: 8px;
+    min-width: 42px;
+    max-width: 42px;
+    min-height: 26px;
+    max-height: 26px;
+    padding: 0;
 }
 
 QLineEdit#addressInput {
@@ -219,6 +252,17 @@ QLineEdit#addressInput {
 
 QLineEdit#addressInput:focus {
     border: 0;
+}
+
+QLineEdit#addressInput QToolButton {
+    min-width: 18px;
+    max-width: 18px;
+    min-height: 18px;
+    max-height: 18px;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: transparent;
 }
 
 QSplitter::handle {
@@ -301,7 +345,7 @@ QListWidget#settingsNavigation::item:selected {
 
 QLabel#settingsHeading {
     color: #fafafa;
-    font-size: 22px;
+    font-size: 26px;
     font-weight: 700;
 }
 
@@ -326,3 +370,25 @@ QCheckBox {
     min-height: 32px;
     spacing: 9px;
 }
+
+QScrollArea, QScrollArea > QWidget > QWidget { background: #121214; border: 0; }
+QPushButton:disabled, QToolButton:disabled { color: #a1a1aa; }
+QCheckBox::indicator { width: 18px; height: 18px; border: 1px solid #3f3f46; border-radius: 4px; background: #202023; }
+QCheckBox::indicator:checked { background: #8b7cf6; border: 5px solid #202023; }
+QCheckBox::indicator:hover { border-color: #8b7cf6; }
+QComboBox::drop-down { width: 22px; border: 0; }
+QComboBox::down-arrow { image: url(:/icons/chevron-down.svg); width: 12px; height: 12px; }
+QProgressBar { background: #202023; border: 0; }
+QProgressBar::chunk { background: #8b7cf6; }
+
+QLabel#workspaceHeading { font-weight: 600; color: #a1a1aa; }
+QTabBar#workspaceTabs { background: transparent; }
+QTabBar#workspaceTabs::tab {
+    min-width: 22px; min-height: 30px; padding: 0 3px; margin: 0 2px;
+    border: 1px solid transparent; border-radius: 6px; color: #a1a1aa;
+}
+QTabBar#workspaceTabs::tab:selected { color: #8b7cf6; background: #27272a; }
+QTabBar#workspaceTabs::tab:hover { background: #202023; }
+QTabBar#workspaceTabs:focus { border: 1px solid #8b7cf6; border-radius: 6px; }
+QTabBar#workspaceTabs QToolButton { min-width: 22px; max-width: 22px; padding: 0; background: #18181b; }
+QToolButton#compactButton:checked { background: #27272a; }

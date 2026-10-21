@@ -1,18 +1,21 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QHash>
 
 class AdBlockInterceptor;
 class AdBlockUpdater;
 class CredentialManager;
 class QCloseEvent;
 class QEvent;
+class QPropertyAnimation;
 class QResizeEvent;
 class QStackedWidget;
 class QTimer;
 class QUrl;
-class QWebEngineProfile;
 class Sidebar;
+class WebProfile;
+class WebView;
 class SplitView;
 class SettingsPage;
 class TabManager;
@@ -21,10 +24,13 @@ class UrlBar;
 class MainWindow final : public QMainWindow
 {
     Q_OBJECT
+    Q_PROPERTY(int sidebarReveal READ sidebarReveal WRITE setSidebarReveal)
+    Q_PROPERTY(int urlBarReveal READ urlBarReveal WRITE setUrlBarReveal)
 
 public:
-    explicit MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(bool privateMode = false, QWidget *parent = nullptr);
     ~MainWindow() override;
+    void openUrls(const QList<QUrl> &urls);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -41,9 +47,11 @@ private:
     void saveSession() const;
 
     int createTab(const QUrl &url, int workspace, bool activate,
-                  bool essential = false, int folderId = -1, bool lazy = false);
+                  bool essential = false, int folderId = -1, bool lazy = false,
+                  WebView *related = nullptr);
     void activateTab(int id);
     void closeTab(int id);
+    void closeCurrentTab();
     void cycleTabs(int direction);
     void switchWorkspace(int workspace);
     void toggleSplit(bool enabled);
@@ -52,12 +60,36 @@ private:
     void updateSidebarTab(int id);
     void syncFolders();
     void setCompactMode(bool enabled);
+    void setCompactSidebarShown(bool shown);
+    void revealAddressBar();
+    void showAddressBar(bool focus);
     void updateShellGeometry();
+    void syncPageSurfaces();
+    [[nodiscard]] int sidebarReveal() const;
+    void setSidebarReveal(int value);
+    [[nodiscard]] int urlBarReveal() const;
+    void setUrlBarReveal(int value);
     void setSearchTemplate(const QString &searchTemplate);
     void scheduleSessionSave();
     void showBrowserMenu(const QPoint &globalPosition);
     void showCredentialManager();
     void showSettings();
+    void executeCommand(int command);
+    WebView *currentView() const;
+    int activeTabId() const;
+    void setPageInputEnabled(bool enabled);
+    void showFind();
+    void showLibrary(bool bookmarks);
+    void addBookmark();
+    void showSiteControls();
+    void showClearData();
+    void openProfile();
+    void setDefaultProfile();
+    void setDefaultBrowser();
+    void importBookmarks();
+    void exportBookmarks();
+    void manageWorkspace(int action);
+    void closeFollowingTabs(int id);
     void closeSettings();
     [[nodiscard]] int splitCandidate(int excludedId) const;
 
@@ -67,10 +99,14 @@ private:
     QWidget *revealStrip_ = nullptr;
     QWidget *topRevealStrip_ = nullptr;
     QTimer *hideSidebarTimer_ = nullptr;
+    QPropertyAnimation *sidebarSlide_ = nullptr;
+    QPropertyAnimation *urlBarSlide_ = nullptr;
+    int sidebarReveal_ = 0;
+    int urlBarReveal_ = 0;
     QTimer *hideUrlBarTimer_ = nullptr;
     QTimer *sessionSaveTimer_ = nullptr;
     QTimer *minimizeTimer_ = nullptr;
-    QWebEngineProfile *profile_ = nullptr;
+    WebProfile *profile_ = nullptr;
     AdBlockInterceptor *adBlocker_ = nullptr;
     AdBlockUpdater *adBlockUpdater_ = nullptr;
     CredentialManager *credentialManager_ = nullptr;
@@ -80,16 +116,25 @@ private:
     SplitView *splitView_ = nullptr;
     SettingsPage *settingsPage_ = nullptr;
     int currentWorkspace_ = 0;
-    int lastWorkspaceTab_[2] = {-1, -1};
+    QHash<int, int> lastWorkspaceTab_;
+    QStringList workspaceNames_ {QStringLiteral("Espaço 1"), QStringLiteral("Espaço 2")};
     int currentTabId_ = -1;
+    int unloadedTabId_ = -1;
+    int addressFocusToken_ = 0;
     int secondaryTabId_ = -1;
+    int activePanelId_ = -1;
     bool splitEnabled_ = false;
     bool compactMode_ = false;
     bool compactSidebarVisible_ = false;
+    bool sidebarSlideGuard_ = false;
     bool compactUrlBarVisible_ = false;
     bool restoringSession_ = false;
+    bool sessionOpened_ = false;
     bool settingsVisible_ = false;
+    bool closingTab_ = false;
     bool suspendOnMinimize_ = true;
+    bool privateMode_ = false;
     bool restoreSessionEnabled_ = true;
+    bool exportingBookmarks_ = false;
     QString searchTemplate_ = QStringLiteral("https://duckduckgo.com/?q=%1");
 };

@@ -1,15 +1,15 @@
+#include <QIconEngine>
+#include <QApplication>
+#include <QPalette>
 #include "ui/ZenithIcons.h"
 
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
 
-QIcon zenithIcon(const ZenithIcon type, const QColor &color, const int size)
+namespace {
+void drawIcon(QPainter &painter, ZenithIcon type, const QColor &color, int size)
 {
-    QPixmap pixmap(size, size);
-    pixmap.fill(Qt::transparent);
-
-    QPainter painter(&pixmap);
     painter.setRenderHint(QPainter::Antialiasing);
     QPen pen(color, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     painter.setPen(pen);
@@ -56,6 +56,28 @@ QIcon zenithIcon(const ZenithIcon type, const QColor &color, const int size)
         painter.drawPath(path);
         break;
     }
+    case ZenithIcon::Menu:
+        for (const qreal y : {.28, .5, .72})
+            painter.drawLine(QPointF(s * .22, s * y), QPointF(s * .78, s * y));
+        break;
+    case ZenithIcon::Sidebar:
+        painter.drawRoundedRect(QRectF(s * .14, s * .2, s * .72, s * .6), 2, 2);
+        painter.drawLine(QPointF(s * .39, s * .2), QPointF(s * .39, s * .8));
+        break;
+    case ZenithIcon::Download:
+        painter.drawLine(QPointF(s * .5, s * .15), QPointF(s * .5, s * .65));
+        painter.drawLine(QPointF(s * .3, s * .45), QPointF(s * .5, s * .65));
+        painter.drawLine(QPointF(s * .7, s * .45), QPointF(s * .5, s * .65));
+        painter.drawLine(QPointF(s * .2, s * .83), QPointF(s * .8, s * .83));
+        break;
+    case ZenithIcon::Bookmark: {
+        QPainterPath path;
+        path.moveTo(s * .28, s * .15); path.lineTo(s * .72, s * .15);
+        path.lineTo(s * .72, s * .85); path.lineTo(s * .5, s * .68);
+        path.lineTo(s * .28, s * .85); path.closeSubpath();
+        painter.drawPath(path);
+        break;
+    }
     case ZenithIcon::More:
         painter.setBrush(color);
         for (const qreal x : {.28, .5, .72})
@@ -97,6 +119,31 @@ QIcon zenithIcon(const ZenithIcon type, const QColor &color, const int size)
         painter.drawRect(QRectF(s * .3, s * .3, s * .4, s * .4));
         break;
     }
-    painter.end();
-    return QIcon(pixmap);
+}
+class IconEngine final : public QIconEngine {
+public:
+    IconEngine(ZenithIcon type, QColor color) : type_(type), color_(color) {}
+    QIconEngine *clone() const override { return new IconEngine(type_, color_); }
+    void paint(QPainter *painter, const QRect &rect, QIcon::Mode mode, QIcon::State) override {
+        painter->save();
+        const qreal side = qMin(rect.width(), rect.height());
+        painter->translate(rect.x() + (rect.width() - side) / 2, rect.y() + (rect.height() - side) / 2);
+        painter->scale(side / 18., side / 18.);
+        QColor color = color_.isValid() ? color_ : qApp->palette().color(mode == QIcon::Disabled ? QPalette::Disabled : QPalette::Active, QPalette::ButtonText);
+        drawIcon(*painter, type_, color, 18);
+        painter->restore();
+    }
+    QPixmap pixmap(const QSize &size, QIcon::Mode mode, QIcon::State state) override {
+        QPixmap pixmap(size); pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap); paint(&painter, QRect(QPoint(), size), mode, state);
+        return pixmap;
+    }
+private:
+    ZenithIcon type_;
+    QColor color_;
+};
+}
+QIcon zenithIcon(ZenithIcon type, const QColor &color, int)
+{
+    return QIcon(new IconEngine(type, color));
 }

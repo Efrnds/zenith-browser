@@ -1,19 +1,31 @@
 #include "core/AdBlockInterceptor.h"
 
 #include <QUrl>
-#include <QWebEngineUrlRequestInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QRegularExpression>
 
 #include <algorithm>
 #include <cctype>
 
 AdBlockInterceptor::AdBlockInterceptor(QObject *parent)
-    : QWebEngineUrlRequestInterceptor(parent)
+    : QObject(parent)
 {
-    setRules({
+    setRules(builtInDomains());
+}
+
+QStringList AdBlockInterceptor::builtInDomains()
+{
+    return {
         QStringLiteral("2mdn.net"),
         QStringLiteral("adcolony.com"),
         QStringLiteral("adform.net"),
         QStringLiteral("adnxs.com"),
+        QStringLiteral("adnxs-simple.com"),
+        QStringLiteral("ads.msn.com"),
+        QStringLiteral("ads1.msn.com"),
+        QStringLiteral("ads2.msn.com"),
         QStringLiteral("adsrvr.org"),
         QStringLiteral("advertising.com"),
         QStringLiteral("amazon-adsystem.com"),
@@ -32,25 +44,21 @@ AdBlockInterceptor::AdBlockInterceptor(QObject *parent)
         QStringLiteral("scorecardresearch.com"),
         QStringLiteral("smartadserver.com"),
         QStringLiteral("taboola.com"),
-    });
+    };
 }
 
-void AdBlockInterceptor::interceptRequest(QWebEngineUrlRequestInfo &info)
+bool AdBlockInterceptor::reject(const QUrl &url, const bool mainFrame)
 {
-    if (!enabled_.load(std::memory_order_relaxed)) {
-        return;
-    }
-
-    if (wouldBlock(info.requestUrl(),
-                   info.resourceType() == QWebEngineUrlRequestInfo::ResourceTypeMainFrame)) {
-        blockedCount_.fetch_add(1, std::memory_order_relaxed);
-        info.block(true);
-    }
+    if (!enabled_.load(std::memory_order_relaxed) || !wouldBlock(url, mainFrame))
+        return false;
+    blockedCount_.fetch_add(1, std::memory_order_relaxed);
+    return true;
 }
 
 void AdBlockInterceptor::setEnabled(const bool enabled)
 {
-    enabled_.store(enabled, std::memory_order_relaxed);
+    if (enabled_.exchange(enabled, std::memory_order_relaxed) != enabled)
+        emit enabledChanged();
 }
 
 bool AdBlockInterceptor::isEnabled() const
@@ -77,7 +85,13 @@ void AdBlockInterceptor::setRules(const QStringList &blockedDomains,
         destination.erase(std::unique(destination.begin(), destination.end()), destination.end());
         return destination;
     };
-    setCompiledRules(compile(blockedDomains), compile(allowedDomains));
+    auto rules = std::make_shared<Rules>();
+    rules->blockedDomains = compile(blockedDomains);
+    rules->allowedDomains = compile(allowedDomains);
+    rules->blockedNames = blockedDomains;
+    rules->allowedNames = allowedDomains;
+    rules_.store(std::move(rules), std::memory_order_release);
+    emit rulesChanged();
 }
 
 void AdBlockInterceptor::setCompiledRules(std::vector<quint64> blocked,
@@ -91,6 +105,45 @@ void AdBlockInterceptor::setCompiledRules(std::vector<quint64> blocked,
     rules->blockedDomains = std::move(blocked);
     rules->allowedDomains = std::move(allowed);
     rules_.store(std::move(rules), std::memory_order_release);
+    emit rulesChanged();
+}
+
+QByteArray AdBlockInterceptor::contentFilter() const
+{
+    QJsonArray result;
+    const auto append = [&result](const QString &pattern, const QString &action) {
+        result.append(QJsonObject{{"trigger", QJsonObject{{"url-filter", pattern}}},
+                                  {"action", QJsonObject{{"type", action}}}});
+    };
+    const auto domainPattern = [](QString domain) {
+        domain = domain.trimmed().toLower();
+        while (domain.startsWith('.')) domain.remove(0, 1);
+        while (domain.endsWith('.')) domain.chop(1);
+        // Filter source is data, never executable regular expression syntax.
+        static const QRegularExpression valid(QStringLiteral("^[a-z0-9-]+(?:\\.[a-z0-9-]+)+$"));
+        if (!valid.match(domain).hasMatch()) return QString();
+        domain.replace(".", "\\.");
+        return QStringLiteral("^https?://([^/]+\\.)?") + domain + QStringLiteral("[/:]");
+    };
+    const auto rules = rules_.load(std::memory_order_acquire);
+    if (rules) {
+        for (const QString &domain : rules->blockedNames) {
+            const QString pattern = domainPattern(domain);
+            if (!pattern.isEmpty()) append(pattern, "block");
+        }
+        for (const QString &domain : rules->allowedNames) {
+            const QString pattern = domainPattern(domain);
+            if (!pattern.isEmpty()) append(pattern, "ignore-previous-rules");
+        }
+    }
+    result.append(QJsonObject{
+        {"trigger", QJsonObject{{"url-filter", ".*"}, {"if-domain", QJsonArray{
+            "outlook.live.com", "outlook.office.com", "outlook.office365.com"}}}},
+        {"action", QJsonObject{{"type", "css-display-none"}, {"selector",
+            "#app [data-message-ad-id],#app [data-ad-slot],"
+            "#app iframe[title='Advertisement'],#app iframe[title='Anúncio'],"
+            "#app div[role='complementary'][data-skip-link-name][id] div[id*='-']:has(> div:not([class]) > div[class] img[src$='/images/ads-olk-icon.png'])"}}}});
+    return QJsonDocument(result).toJson(QJsonDocument::Compact);
 }
 
 quint64 AdBlockInterceptor::hashDomain(const QStringView domain)
@@ -121,7 +174,28 @@ bool AdBlockInterceptor::wouldBlock(const QUrl &url, const bool mainFrame) const
     std::ranges::transform(host, host.begin(), [](const unsigned char character) {
         return static_cast<char>(std::tolower(character));
     });
+    const auto isHost = [&host](const char *suffix) {
+        const std::string needle(suffix);
+        if (host == needle)
+            return true;
+        return host.size() > needle.size()
+            && host[host.size() - needle.size() - 1] == '.'
+            && host.compare(host.size() - needle.size(), needle.size(), needle) == 0;
+    };
+    if (isHost("googlevideo.com") || isHost("ytimg.com") || isHost("ggpht.com"))
+        return false;
     const QString path = url.path().toLower();
+    const bool youtubeHost = isHost("youtube.com") || isHost("youtu.be")
+        || isHost("youtube-nocookie.com");
+    if (!mainFrame && youtubeHost
+        && (path.contains(QStringLiteral("/pagead/"))
+            || path.contains(QStringLiteral("/ptracking"))
+            || path.contains(QStringLiteral("/api/stats/ads"))
+            || path.contains(QStringLiteral("/get_midroll"))
+            || path.contains(QStringLiteral("/pcs/activeview"))
+            || path.contains(QStringLiteral("ad_break")))) {
+        return true;
+    }
     const bool blockedPath = !mainFrame
         && (path.contains(QStringLiteral("/ads/"))
             || path.contains(QStringLiteral("/adserver/"))

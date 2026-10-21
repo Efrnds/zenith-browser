@@ -1,6 +1,7 @@
 #include "core/CredentialStore.h"
 
 #include <QSettings>
+#include <QCoreApplication>
 
 #ifdef Q_OS_LINUX
 #pragma push_macro("signals")
@@ -17,18 +18,32 @@
 namespace {
 constexpr auto kService = "Zenith Browser";
 
+QByteArray credentialApplication()
+{
+    const QString name = QCoreApplication::applicationName();
+    return name == QStringLiteral("Zenith Browser") ? QByteArrayLiteral("zenith-browser")
+        : QByteArrayLiteral("zenith-browser:") + name.toUtf8();
+}
+
 #ifdef Q_OS_LINUX
 const SecretSchema *credentialSchema()
 {
     static const SecretSchema schema = {
-        "org.zenith.browser.credentials",
+        "org.zenith.browser.credentials.v2",
         SECRET_SCHEMA_NONE,
         {
             {"origin", SECRET_SCHEMA_ATTRIBUTE_STRING},
             {"application", SECRET_SCHEMA_ATTRIBUTE_STRING},
+            {"username", SECRET_SCHEMA_ATTRIBUTE_STRING},
             {nullptr, SECRET_SCHEMA_ATTRIBUTE_STRING},
         },
     };
+    return &schema;
+}
+const SecretSchema *legacySchema()
+{
+    static const SecretSchema schema = {"org.zenith.browser.credentials", SECRET_SCHEMA_NONE,
+        {{"origin", SECRET_SCHEMA_ATTRIBUTE_STRING}, {"application", SECRET_SCHEMA_ATTRIBUTE_STRING}, {nullptr, SECRET_SCHEMA_ATTRIBUTE_STRING}}};
     return &schema;
 }
 #endif
@@ -58,7 +73,8 @@ bool CredentialStore::save(const StoredCredential &credential, QString *error)
             .toUtf8().constData(),
         password.constData(), nullptr, &nativeError,
         "origin", origin.constData(),
-        "application", "zenith-browser",
+        "application", credentialApplication().constData(),
+        "username", credential.username.toUtf8().constData(),
         nullptr);
     if (nativeError) {
         setError(error, QString::fromUtf8(nativeError->message));
@@ -113,12 +129,14 @@ bool CredentialStore::save(const StoredCredential &credential, QString *error)
 }
 
 std::optional<StoredCredential> CredentialStore::lookup(const QString &origin,
-                                                        QString *error) const
+                                                        QString *error, const QString &account) const
 {
     QString username;
+    bool legacy = false;
     for (const auto &entry : entries()) {
-        if (entry.origin == origin) {
+        if (entry.origin == origin && (account.isEmpty() || entry.username == account)) {
             username = entry.username;
+            legacy = entry.legacy;
             break;
         }
     }
@@ -129,10 +147,13 @@ std::optional<StoredCredential> CredentialStore::lookup(const QString &origin,
 #ifdef Q_OS_LINUX
     GError *nativeError = nullptr;
     const QByteArray encodedOrigin = origin.toUtf8();
-    gchar *secret = secret_password_lookup_sync(
+    gchar *secret = legacy ? secret_password_lookup_sync(legacySchema(), nullptr, &nativeError,
+        "origin", encodedOrigin.constData(), "application", credentialApplication().constData(), nullptr)
+        : secret_password_lookup_sync(
         credentialSchema(), nullptr, &nativeError,
         "origin", encodedOrigin.constData(),
-        "application", "zenith-browser",
+        "application", credentialApplication().constData(),
+        "username", username.toUtf8().constData(),
         nullptr);
     if (secret) {
         password = QString::fromUtf8(secret);
@@ -169,16 +190,28 @@ std::optional<StoredCredential> CredentialStore::lookup(const QString &origin,
     return StoredCredential {origin, username, password};
 }
 
-bool CredentialStore::remove(const QString &origin, QString *error)
+bool CredentialStore::remove(const QString &origin, QString *error, const QString &username)
 {
+    if (username.isEmpty()) {
+        bool ok = true;
+        for (const auto &entry : entries())
+            if (entry.origin == origin) ok &= remove(origin, error, entry.username);
+        return ok;
+    }
+    bool legacy = false;
+    for (const auto &entry : entries())
+        if (entry.origin == origin && entry.username == username) legacy = entry.legacy;
     bool removed = false;
 #ifdef Q_OS_LINUX
     GError *nativeError = nullptr;
     const QByteArray encodedOrigin = origin.toUtf8();
-    removed = secret_password_clear_sync(
+    removed = legacy ? secret_password_clear_sync(legacySchema(), nullptr, &nativeError,
+        "origin", encodedOrigin.constData(), "application", credentialApplication().constData(), nullptr)
+        : secret_password_clear_sync(
         credentialSchema(), nullptr, &nativeError,
         "origin", encodedOrigin.constData(),
-        "application", "zenith-browser",
+        "application", credentialApplication().constData(),
+        "username", username.toUtf8().constData(),
         nullptr);
     if (nativeError) {
         setError(error, QString::fromUtf8(nativeError->message));
@@ -202,7 +235,7 @@ bool CredentialStore::remove(const QString &origin, QString *error)
     }
 #endif
     if (removed)
-        removeFromIndex(origin);
+        removeFromIndex(origin, username);
     return removed;
 }
 
@@ -216,6 +249,7 @@ QList<CredentialEntry> CredentialStore::entries() const
         const CredentialEntry entry {
             settings.value(QStringLiteral("origin")).toString(),
             settings.value(QStringLiteral("username")).toString(),
+            settings.value(QStringLiteral("legacy"), true).toBool(),
         };
         if (!entry.origin.isEmpty() && !entry.username.isEmpty())
             result.append(entry);
@@ -229,8 +263,8 @@ void CredentialStore::updateIndex(const QString &origin, const QString &username
     auto current = entries();
     bool found = false;
     for (auto &entry : current) {
-        if (entry.origin == origin) {
-            entry.username = username;
+        if (entry.origin == origin && entry.username == username) {
+            entry.legacy = false;
             found = true;
             break;
         }
@@ -244,16 +278,17 @@ void CredentialStore::updateIndex(const QString &origin, const QString &username
         settings.setArrayIndex(index);
         settings.setValue(QStringLiteral("origin"), current.at(index).origin);
         settings.setValue(QStringLiteral("username"), current.at(index).username);
+        settings.setValue(QStringLiteral("legacy"), current.at(index).legacy);
     }
     settings.endArray();
     settings.sync();
 }
 
-void CredentialStore::removeFromIndex(const QString &origin)
+void CredentialStore::removeFromIndex(const QString &origin, const QString &username)
 {
     auto current = entries();
-    current.removeIf([&origin](const CredentialEntry &entry) {
-        return entry.origin == origin;
+    current.removeIf([&origin, &username](const CredentialEntry &entry) {
+        return entry.origin == origin && entry.username == username;
     });
 
     QSettings settings;
@@ -262,6 +297,7 @@ void CredentialStore::removeFromIndex(const QString &origin)
         settings.setArrayIndex(index);
         settings.setValue(QStringLiteral("origin"), current.at(index).origin);
         settings.setValue(QStringLiteral("username"), current.at(index).username);
+        settings.setValue(QStringLiteral("legacy"), current.at(index).legacy);
     }
     settings.endArray();
     settings.sync();

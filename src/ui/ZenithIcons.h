@@ -13,6 +13,10 @@ enum class ZenithIcon {
     Folder,
     Forward,
     More,
+    Menu,
+    Sidebar,
+    Download,
+    Bookmark,
     Reload,
     Settings,
     Shield,
@@ -22,5 +26,5 @@ enum class ZenithIcon {
 };
 
 [[nodiscard]] QIcon zenithIcon(ZenithIcon type,
-                               const QColor &color = QColor(QStringLiteral("#d4d4d8")),
+                               const QColor &color = QColor(),
                                int size = 18);

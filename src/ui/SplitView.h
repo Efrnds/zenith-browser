@@ -4,9 +4,10 @@
 #include <QWidget>
 
 class QLabel;
+class QResizeEvent;
 class QSplitter;
 class QStackedLayout;
-class QWebEngineView;
+class WebView;
 
 class SplitView final : public QWidget
 {
@@ -14,19 +15,23 @@ class SplitView final : public QWidget
 
 public:
     explicit SplitView(QWidget *parent = nullptr);
+    ~SplitView() override;
 
-    void setSingleView(QWebEngineView *view);
-    void setSplitViews(QWebEngineView *primary, QWebEngineView *secondary);
+    void setSingleView(WebView *view);
+    void resizeEvent(QResizeEvent *event) override;
+    void setSplitViews(WebView *primary, WebView *secondary);
     void showEmptyState();
     [[nodiscard]] bool isSplit() const;
 
 private:
     void hideCurrentViews();
+    void parkView(WebView *view);
 
     QStackedLayout *stack_;
     QLabel *emptyState_;
     QSplitter *splitter_;
-    QPointer<QWebEngineView> primary_;
-    QPointer<QWebEngineView> secondary_;
+    QWidget *page_ = nullptr;
+    QPointer<WebView> primary_;
+    QPointer<WebView> secondary_;
     bool split_ = false;
 };

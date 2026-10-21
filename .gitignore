@@ -3,3 +3,4 @@ build-release/
 CMakeUserPresets.json
 compile_commands.json
 .cache/
+dist/

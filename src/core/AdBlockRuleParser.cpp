@@ -24,7 +24,10 @@ QString domainFromRule(QString line)
 {
     if (!line.startsWith(QStringLiteral("||")))
         return {};
+    // Conditional ABP rules cannot be widened into global domain decisions.
+    if (line.contains('$')) return {};
     line.remove(0, 2);
+    if (line.contains('^') && !line.endsWith('^')) return {};
     qsizetype end = line.indexOf('^');
     const qsizetype option = line.indexOf('$');
     if (end < 0 || (option >= 0 && option < end))
