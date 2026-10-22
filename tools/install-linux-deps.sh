@@ -3,8 +3,8 @@ set -euo pipefail
 
 case "${1:-base}" in
   base) extra=() ;;
-  flatpak) extra=(flatpak flatpak-builder) ;;
-  release) extra=(flatpak flatpak-builder file libfuse2t64) ;;
+  flatpak) extra=(flatpak flatpak-builder elfutils) ;;
+  release) extra=(flatpak flatpak-builder elfutils file libfuse2t64) ;;
   *) echo "Unknown dependency set: $1" >&2; exit 2 ;;
 esac
 
