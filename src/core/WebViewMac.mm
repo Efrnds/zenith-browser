@@ -302,3 +302,7 @@ void WebView::setMessageHandler(MessageHandler handler)
     impl_->messageHandler = std::move(handler);
     [impl_->webView.configuration.userContentController addScriptMessageHandlerWithReply:impl_->delegate contentWorld:WKContentWorld.pageWorld name:@"credentials"];
 }
+QString WebView::dispatchPlatformMessage(const QString &message)
+{
+    return impl_->messageHandler ? impl_->messageHandler(message) : QString();
+}
