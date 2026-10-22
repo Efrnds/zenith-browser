@@ -202,11 +202,7 @@ jobs:
           cmake --build build --parallel 2
           ./build/zenith-browser.app/Contents/MacOS/zenith-browser --version
           ./build/zenith-browser.app/Contents/MacOS/zenith-browser --private --smoke-test
-          macdeployqt "$PWD/build/zenith-browser.app" -always-overwrite -dmg
-          dmg=$(find . -maxdepth 3 -type f -name '*.dmg' -not -path './build/packages/*' -print -quit)
-          test -n "$dmg"
-          mkdir -p build/packages
-          mv "$dmg" build/packages/ZenithBrowser-macOS.dmg
+          bash tools/package-macos.sh build/zenith-browser.app build/packages/ZenithBrowser-macOS.dmg
       - uses: actions/upload-artifact@v4
         with:
           name: zenith-macos
