@@ -75,3 +75,98 @@ jobs:
         with:
           name: validation-sanitizers
           path: build/validation/
+
+  windows:
+    name: Windows (WebView2)
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install WebView2 SDK
+        shell: pwsh
+        run: |
+          $version = '1.0.4258.31'
+          $packageId = 'microsoft.web.webview2'
+          $package = "$packageId.$version.nupkg"
+          $url = "https://api.nuget.org/v3-flatcontainer/$packageId/$version/$package"
+          Invoke-WebRequest -Uri $url -OutFile $package -MaximumRetryCount 3 -RetryIntervalSec 5
+          if (!(Test-Path $package) -or (Get-Item $package).Length -lt 1MB) { throw "NuGet package download is missing or incomplete: $url" }
+          New-Item -ItemType Directory -Force webview2-sdk | Out-Null
+          $archive = "$packageId.$version.zip"
+          Move-Item -Path $package -Destination $archive
+          Expand-Archive -Path $archive -DestinationPath webview2-sdk -Force
+          if (!(Test-Path 'webview2-sdk/build/native/include/WebView2.h')) { throw 'WebView2 headers missing from NuGet package' }
+          if (!(Test-Path 'webview2-sdk/build/native/x64/WebView2LoaderStatic.lib')) { throw 'WebView2 x64 loader missing from NuGet package' }
+      - name: Install WebView2 Runtime
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile WebView2RuntimeInstaller.exe
+          $installer = Start-Process -FilePath "$PWD/WebView2RuntimeInstaller.exe" -ArgumentList '/silent', '/install' -Wait -PassThru
+          if ($installer.ExitCode -ne 0 -and $installer.ExitCode -ne 3010) { throw "WebView2 Runtime installation failed: $($installer.ExitCode)" }
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          archives: qtbase qtsvg
+          cache: true
+      - name: Configure
+        shell: pwsh
+        run: |
+          $webview2Sdk = Join-Path $env:GITHUB_WORKSPACE 'webview2-sdk'
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=OFF "-DWEBVIEW2_SDK_DIR=$webview2Sdk"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build, deploy Qt, and smoke test
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --install build --config Release --prefix build/stage
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          windeployqt --release --compiler-runtime build/stage/bin/zenith-browser.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ".\build\stage\bin\zenith-browser.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ".\build\stage\bin\zenith-browser.exe" --private --smoke-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -Path build/stage/* -DestinationPath build/ZenithBrowser-Windows-x64.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zenith-windows
+          if-no-files-found: error
+          path: build/ZenithBrowser-Windows-x64.zip
+
+  macos:
+    name: macOS (WKWebView)
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: mac
+          target: desktop
+          arch: clang_64
+          archives: qtbase qtsvg
+          cache: true
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+      - name: Build, deploy Qt, and smoke test
+        run: |
+          cmake --build build --parallel 2
+          ./build/zenith-browser.app/Contents/MacOS/zenith-browser --version
+          ./build/zenith-browser.app/Contents/MacOS/zenith-browser --private --smoke-test
+          macdeployqt "$PWD/build/zenith-browser.app" -always-overwrite -dmg
+          dmg=$(find . -maxdepth 3 -type f -name '*.dmg' -not -path './build/packages/*' -print -quit)
+          test -n "$dmg"
+          mkdir -p build/packages
+          mv "$dmg" build/packages/ZenithBrowser-macOS.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zenith-macos
+          if-no-files-found: error
+          path: build/packages/ZenithBrowser-macOS.dmg

@@ -22,7 +22,7 @@ jobs:
       - name: Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config qt6-base-dev libqt6svg6-dev libwebkit2gtk-4.1-dev libsecret-1-dev libx11-dev xvfb dbus-x11 libxcb-cursor0 flatpak flatpak-builder file fuse libfuse2
+          sudo apt-get install -y cmake ninja-build pkg-config qt6-base-dev libqt6svg6-dev libwebkit2gtk-4.1-dev libsecret-1-dev libx11-dev xvfb dbus-x11 libxcb-cursor0 flatpak flatpak-builder file libfuse2t64
       - name: Configure and verify tag
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
@@ -109,11 +109,13 @@ jobs:
         shell: pwsh
         run: |
           $version = '1.0.4258.31'
-          $package = "Microsoft.Web.WebView2.$version.nupkg"
-          $url = "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/$version/$package"
-          Invoke-WebRequest -Uri $url -OutFile $package
+          $packageId = 'microsoft.web.webview2'
+          $package = "$packageId.$version.nupkg"
+          $url = "https://api.nuget.org/v3-flatcontainer/$packageId/$version/$package"
+          Invoke-WebRequest -Uri $url -OutFile $package -MaximumRetryCount 3 -RetryIntervalSec 5
+          if (!(Test-Path $package) -or (Get-Item $package).Length -lt 1MB) { throw "NuGet package download is missing or incomplete: $url" }
           New-Item -ItemType Directory -Force webview2-sdk | Out-Null
-          $archive = "Microsoft.Web.WebView2.$version.zip"
+          $archive = "$packageId.$version.zip"
           Move-Item -Path $package -Destination $archive
           Expand-Archive -Path $archive -DestinationPath webview2-sdk -Force
           if (!(Test-Path 'webview2-sdk/build/native/include/WebView2.h')) { throw 'WebView2 headers missing from NuGet package' }
@@ -125,7 +127,7 @@ jobs:
           host: windows
           target: desktop
           arch: win64_msvc2022_64
-          modules: qtsvg
+          archives: qtbase qtsvg
           cache: true
       - name: Configure and verify tag
         shell: pwsh
@@ -170,7 +172,7 @@ jobs:
           host: mac
           target: desktop
           arch: clang_64
-          modules: qtsvg
+          archives: qtbase qtsvg
           cache: true
       - name: Configure and verify tag
         run: |
