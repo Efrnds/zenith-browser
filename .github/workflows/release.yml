@@ -16,6 +16,8 @@ jobs:
   linux:
     name: Linux (TGZ, Flatpak, AppImage)
     runs-on: ubuntu-24.04
+    env:
+      WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1'
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +46,7 @@ jobs:
           flatpak install --user --noninteractive --bundle \
             "build/validation/packages/ZenithBrowser-${version}-Linux.flatpak"
           flatpak run io.github.efrnds.ZenithBrowser --version
-          dbus-run-session -- xvfb-run -a flatpak run io.github.efrnds.ZenithBrowser --private --smoke-test
+          dbus-run-session -- xvfb-run -a flatpak run --env=WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 io.github.efrnds.ZenithBrowser --private --smoke-test
       - name: Build AppImage
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
@@ -109,9 +111,11 @@ jobs:
         include:
           - arch: x64
             qt_arch: win64_msvc2022_64
+            qt_host: windows
             vs_arch: x64
           - arch: arm64
             qt_arch: win64_msvc2022_arm64
+            qt_host: windows_arm64
             vs_arch: ARM64
     steps:
       - uses: actions/checkout@v4
@@ -135,7 +139,7 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.3'
-          host: windows
+          host: ${{ matrix.qt_host }}
           target: desktop
           arch: ${{ matrix.qt_arch }}
           archives: qtbase qtsvg
@@ -162,7 +166,8 @@ jobs:
         run: |
           cmake --build build --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --install build --config Release --prefix build/stage
+          $stage = Join-Path $env:GITHUB_WORKSPACE 'build/stage'
+          cmake --install build --config Release --prefix $stage
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ('${{ matrix.arch }}' -eq 'x64') {
             & ".\build\stage\bin\zenith-browser.exe" --version

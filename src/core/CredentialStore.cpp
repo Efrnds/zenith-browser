@@ -174,11 +174,11 @@ std::optional<StoredCredential> CredentialStore::lookup(const QString &origin,
     }
 #elif defined(Q_OS_MACOS)
     const QByteArray service = origin.toUtf8();
-    const QByteArray account = username.toUtf8();
+    const QByteArray accountBytes = username.toUtf8();
     UInt32 length = 0;
     void *data = nullptr;
     if (SecKeychainFindGenericPassword(
-            nullptr, service.size(), service.constData(), account.size(), account.constData(),
+            nullptr, service.size(), service.constData(), accountBytes.size(), accountBytes.constData(),
             &length, &data, nullptr) == errSecSuccess) {
         password = QString::fromUtf8(static_cast<const char *>(data), length);
         SecKeychainItemFreeContent(nullptr, data);

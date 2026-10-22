@@ -3,6 +3,8 @@ on: [push, pull_request, workflow_dispatch]
 jobs:
   linux:
     runs-on: ubuntu-24.04
+    env:
+      WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1'
     strategy:
       fail-fast: false
       matrix:
@@ -56,6 +58,8 @@ jobs:
             build/validation/packages/SHA256SUMS
   sanitizers:
     runs-on: ubuntu-24.04
+    env:
+      WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1'
     steps:
       - uses: actions/checkout@v4
       - name: Dependencies
@@ -86,9 +90,11 @@ jobs:
         include:
           - arch: x64
             qt_arch: win64_msvc2022_64
+            qt_host: windows
             vs_arch: x64
           - arch: arm64
             qt_arch: win64_msvc2022_arm64
+            qt_host: windows_arm64
             vs_arch: ARM64
     steps:
       - uses: actions/checkout@v4
@@ -118,7 +124,7 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.3'
-          host: windows
+          host: ${{ matrix.qt_host }}
           target: desktop
           arch: ${{ matrix.qt_arch }}
           archives: qtbase qtsvg
@@ -137,7 +143,8 @@ jobs:
         run: |
           cmake --build build --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --install build --config Release --prefix build/stage
+          $stage = Join-Path $env:GITHUB_WORKSPACE 'build/stage'
+          cmake --install build --config Release --prefix $stage
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ('${{ matrix.arch }}' -eq 'x64') {
             & ".\build\stage\bin\zenith-browser.exe" --version
