@@ -13,6 +13,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build pkg-config qt6-base-dev libqt6svg6-dev libwebkit2gtk-4.1-dev libsecret-1-dev libx11-dev xvfb dbus-x11 libxcb-cursor0
+          if [ '${{ matrix.build }}' = 'Release' ]; then sudo apt-get install -y flatpak flatpak-builder; fi
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DBUILD_TESTING=ON
       - name: Build
@@ -21,7 +22,23 @@ jobs:
         run: |
           validation_options=()
           if [ '${{ matrix.build }}' = 'Release' ]; then validation_options+=(--package); fi
-          dbus-run-session -- xvfb-run -a python3 tools/validate-release.py --build build --output build/validation "${validation_options[@]}"
+          dbus-run-session -- xvfb-run -a python3 tools/validate-release.py --build build --output build/validation --isolate-tests "${validation_options[@]}"
+      - name: Build and smoke-test Flatpak
+        if: matrix.build == 'Release'
+        run: |
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive flathub org.gnome.Platform//50 org.gnome.Sdk//50
+          flatpak-builder --user --force-clean --disable-rofiles-fuse --install-deps-from=flathub \
+            --repo=flatpak-repo flatpak-build packaging/io.github.efrnds.ZenithBrowser.yml
+          version=$(cat build/zenith-version.txt)
+          flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
+            flatpak-repo "build/validation/packages/ZenithBrowser-${version}-Linux.flatpak" \
+            io.github.efrnds.ZenithBrowser stable
+          flatpak install --user --noninteractive --bundle \
+            "build/validation/packages/ZenithBrowser-${version}-Linux.flatpak"
+          flatpak run io.github.efrnds.ZenithBrowser --version
+          dbus-run-session -- xvfb-run -a flatpak run io.github.efrnds.ZenithBrowser --private --smoke-test
+          (cd build/validation/packages && sha256sum ZenithBrowser-* > SHA256SUMS)
       - name: Collect validation evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -33,7 +50,10 @@ jobs:
         if: matrix.build == 'Release'
         with:
           name: zenith-linux
-          path: build/validation/packages/ZenithBrowser-*.tar.gz
+          path: |
+            build/validation/packages/ZenithBrowser-*.tar.gz
+            build/validation/packages/ZenithBrowser-*.flatpak
+            build/validation/packages/SHA256SUMS
   sanitizers:
     runs-on: ubuntu-24.04
     steps:
@@ -49,7 +69,7 @@ jobs:
       - name: Unit tests
         env:
           ASAN_OPTIONS: detect_leaks=0
-        run: dbus-run-session -- xvfb-run -a python3 tools/validate-release.py --build build --output build/validation
+        run: dbus-run-session -- xvfb-run -a python3 tools/validate-release.py --build build --output build/validation --isolate-tests
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -22,7 +22,103 @@ def run(command, env, log, timeout=300):
         result = subprocess.run(list(map(str, command)), env=env, stdout=stream,
                                 stderr=subprocess.STDOUT, timeout=timeout, check=False)
     if result.returncode:
+        print(f"Saída recente de {log}:", file=sys.stderr, flush=True)
+        try:
+            lines = log.read_text(errors="replace").splitlines()
+            for line in lines[-80:]:
+                print(line, file=sys.stderr)
+        except OSError:
+            pass
         raise RuntimeError(f"Falha ({result.returncode}); confira {log}")
+
+
+def isolated_test_run(binary, env, output):
+    """Retry a signal-killed Qt/WebKit suite with one test slot per process."""
+    functions_log = output / "test-functions.log"
+    with functions_log.open("w") as stream:
+        listed = subprocess.run([str(binary), "-functions"], env=env, stdout=stream,
+                                stderr=subprocess.STDOUT, check=False)
+    if listed.returncode:
+        raise RuntimeError(f"Não foi possível listar testes ({listed.returncode}); confira {functions_log}")
+    functions = []
+    for line in functions_log.read_text(errors="replace").splitlines():
+        value = line.strip()
+        if value.endswith("()") and value[:-2].replace("_", "").isalnum():
+            functions.append(value[:-2])
+    if not functions:
+        raise RuntimeError("zenith-core-tests não listou funções de teste")
+
+    suite = ET.Element("testsuite", name="CoreTests", tests="0", failures="0", errors="0",
+                       skipped="0", time="0")
+    text_parts = ["Suite original encerrada por sinal; reexecutando os testes em processos separados.\n"]
+    failed = []
+    duration = 0.0
+    benchmark = output / "benchmark.json"
+    for function in functions:
+        case_dir = output / "isolated-tests"
+        case_dir.mkdir(exist_ok=True)
+        text_log = case_dir / f"{function}.txt"
+        xml_log = case_dir / f"{function}.xml"
+        case_env = env.copy()
+        if function == "benchmarksBrowserWorkflows":
+            case_env["ZENITH_BENCHMARK_OUTPUT"] = str(benchmark)
+        command = [binary, function, "-o", f"{text_log},txt", "-o", f"{xml_log},junitxml"]
+        print("Executando teste isolado:", function, flush=True)
+        with (case_dir / f"{function}.process.log").open("w") as process_log:
+            result = subprocess.run(list(map(str, command)), env=case_env, stdout=process_log,
+                                    stderr=subprocess.STDOUT, timeout=300, check=False)
+        if text_log.exists():
+            text_parts.append(f"\n===== {function} (exit {result.returncode}) =====\n")
+            text_parts.append(text_log.read_text(errors="replace"))
+        cases = []
+        if xml_log.exists():
+            try:
+                cases = list(ET.parse(xml_log).getroot().iter("testcase"))
+            except ET.ParseError:
+                cases = []
+        selected = [case for case in cases if case.get("name") == function]
+        if not selected:
+            selected = [ET.Element("testcase", name=function, classname="CoreTests", time="0")]
+            issue = ET.SubElement(selected[0], "error", message=f"processo terminou com código {result.returncode}")
+            issue.text = (case_dir / f"{function}.process.log").read_text(errors="replace")
+        for case in selected:
+            suite.append(case)
+            duration += float(case.get("time", "0"))
+            if case.find("failure") is not None or case.find("error") is not None or result.returncode:
+                failed.append(function)
+        if result.returncode:
+            log = case_dir / f"{function}.process.log"
+            text_parts.append(f"\nPROCESS OUTPUT ({result.returncode}):\n")
+            text_parts.append(log.read_text(errors="replace"))
+
+    for name, index in (("initTestCase", 0), ("cleanupTestCase", -1)):
+        if functions:
+            xml_log = output / "isolated-tests" / f"{functions[index]}.xml"
+            if xml_log.exists():
+                try:
+                    for case in ET.parse(xml_log).getroot().iter("testcase"):
+                        if case.get("name") == name:
+                            suite.append(case)
+                            duration += float(case.get("time", "0"))
+                            if case.find("failure") is not None or case.find("error") is not None:
+                                failed.append(name)
+                            break
+                except ET.ParseError:
+                    pass
+    cases = list(suite.iter("testcase"))
+    failures = sum(case.find("failure") is not None for case in cases)
+    errors = sum(case.find("error") is not None for case in cases)
+    skipped = sum(case.find("skipped") is not None for case in cases)
+    suite.set("tests", str(len(cases)))
+    suite.set("failures", str(failures))
+    suite.set("errors", str(errors))
+    suite.set("skipped", str(skipped))
+    suite.set("time", f"{duration:.3f}")
+    ET.ElementTree(suite).write(output / "tests.xml", encoding="utf-8", xml_declaration=True)
+    (output / "tests.txt").write_text("".join(text_parts))
+    if failed:
+        unique = ", ".join(dict.fromkeys(failed))
+        raise RuntimeError(f"Falharam testes isolados: {unique}")
 
 
 def test_counts(path):
@@ -62,6 +158,7 @@ def main():
     parser.add_argument("--output", type=Path, help="Pasta para logs, capturas e relatório")
     parser.add_argument("--offscreen", action="store_true", help="Somente widgets; não aprova integração gráfica")
     parser.add_argument("--package", action="store_true", help="Gerar e conferir também o pacote TGZ")
+    parser.add_argument("--isolate-tests", action="store_true", help="Executar cada teste Qt em processo próprio")
     args = parser.parse_args()
     build = args.build.resolve()
     output = (args.output or Path.home() / ".cache/zenith-validation" / time.strftime("%Y%m%d-%H%M%S")).resolve()
@@ -95,8 +192,28 @@ def main():
             report["version"] = (output / "version.txt").read_text().strip()
             report["binary_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
             stage = "tests"
-            run([tests, "-o", str(output / "tests.txt") + ",txt", "-o",
-                 str(output / "tests.xml") + ",junitxml"], env, output / "tests-process.log")
+            if args.isolate_tests:
+                report["test_execution_mode"] = "isolated"
+                isolated_test_run(tests, env, output)
+            else:
+                test_command = [tests, "-o", str(output / "tests.txt") + ",txt", "-o",
+                                str(output / "tests.xml") + ",junitxml"]
+                with (output / "tests-process.log").open("w") as stream:
+                    test_result = subprocess.run(list(map(str, test_command)), env=env, stdout=stream,
+                                                 stderr=subprocess.STDOUT, timeout=300, check=False)
+            if not args.isolate_tests and test_result.returncode < 0:
+                report["test_execution_mode"] = "isolated_after_signal"
+                report["suite_process_signal"] = -test_result.returncode
+                print(f"Suíte morreu pelo sinal {-test_result.returncode}; isolando cada teste.",
+                      file=sys.stderr, flush=True)
+                isolated_test_run(tests, env, output)
+            elif not args.isolate_tests and test_result.returncode:
+                print(f"Saída recente de {output / 'tests-process.log'}:", file=sys.stderr, flush=True)
+                for line in (output / "tests-process.log").read_text(errors="replace").splitlines()[-80:]:
+                    print(line, file=sys.stderr)
+                raise RuntimeError(f"Falha ({test_result.returncode}); confira {output / 'tests-process.log'}")
+            elif not args.isolate_tests:
+                report["test_execution_mode"] = "single_process"
             report["tests"] = test_counts(output / "tests.xml")
             if report["tests"]["failed"] or (not args.offscreen and report["tests"]["skipped"]):
                 raise RuntimeError("Integração exige testes sem falhas nem skips")

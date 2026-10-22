@@ -4,6 +4,9 @@ Navegador Linux em C++20, Qt Widgets e WebKitGTK, com abas verticais, pastas,
 workspaces e split view. O código local está em 1.0.0; a publicação aguarda as
 conferências finais e o envio ao GitHub. O host gráfico usa
 X11 ou XWayland; não há port nativo Wayland, Windows ou macOS neste executável.
+O CI prepara TGZ e Flatpak para Linux. AppImage, `.exe` e `.dmg` não são
+publicados enquanto o empacotamento do WebKitGTK e os backends de outros
+sistemas não estiverem prontos e testados. Consulte a [matriz de plataformas](docs/PLATAFORMAS.md).
 
 A RC3 reorganiza as configurações em oito categorias, adiciona densidades e
 restauração por seção, preserva o retorno entre ferramentas e transfere abas ao

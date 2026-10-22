@@ -2,10 +2,10 @@
 
 A fonte local agora está configurada como **1.0.0**; a última candidata RC4
 passou na validação gráfica e no pacote extraído.
-O pacote TGZ contém o executável e a documentação; depende de Qt, WebKitGTK,
-libsecret e X11 instalados. Não é um AppImage e não inclui essas bibliotecas.
-O pacote do GitHub é compilado no Ubuntu 24.04 x86_64. Um binário compilado
-localmente em outra distribuição não substitui a validação desse pacote.
+O TGZ contém o executável e a documentação; depende de Qt, WebKitGTK, libsecret
+e X11 instalados. O workflow também gera um Flatpak com o runtime GNOME 50. O
+TGZ e o Flatpak do GitHub são compilados no Ubuntu 24.04 x86_64. Veja a matriz
+de alvos em [PLATAFORMAS.md](PLATAFORMAS.md).
 
 ## Fluxo do GitHub
 
@@ -16,7 +16,8 @@ O arquivo `.github/workflows/release.yml` responde a tags `v*`:
 2. Roda testes de unidade e integração em Xvfb com `ZENITH_REQUIRE_DISPLAY=1`.
    Isso impede que a ausência de display transforme a rodada gráfica em sucesso.
 3. Executa o smoke test em perfil temporário e testes com ASan/UBSan.
-4. Gera o TGZ e `SHA256SUMS`, disponibilizando os logs como artefato separado.
+4. Gera o TGZ e Flatpak, calcula `SHA256SUMS` e disponibiliza os logs como
+   artefato separado.
 5. Confere os hashes e cria um rascunho da Release, marcado como pré-lançamento
    quando a tag contém sufixo. Apenas esse último job recebe `contents: write`.
 

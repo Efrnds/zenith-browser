@@ -1,0 +1,68 @@
+app-id: io.github.efrnds.ZenithBrowser
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: zenith-browser
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=x11
+  - --socket=pulseaudio
+  - --device=dri
+  - --filesystem=xdg-download:create
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.a11y.Bus
+  - --talk-name=org.freedesktop.Notifications
+  - --env=QT_QPA_PLATFORM=xcb
+  - --env=QT_PLUGIN_PATH=/app/plugins
+  - --env=QT_QPA_PLATFORM_PLUGIN_PATH=/app/plugins/platforms
+rename-desktop-file: zenith-browser.desktop
+rename-icon: zenith-browser
+cleanup:
+  - /include
+  - /lib/cmake
+  - /lib/pkgconfig
+  - /lib/*.a
+  - /lib/*.la
+modules:
+  - name: qtbase
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_INSTALL_PREFIX=/app
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DQT_BUILD_TESTS=OFF
+      - -DQT_BUILD_EXAMPLES=OFF
+      - -DQT_BUILD_BENCHMARKS=OFF
+      - -DQT_BUILD_TOOLS_BY_DEFAULT=ON
+      - -DFEATURE_xcb=ON
+      - -DFEATURE_xlib=ON
+    sources:
+      - type: archive
+        url: https://download.qt.io/official_releases/qt/6.10/6.10.2/submodules/qtbase-everywhere-src-6.10.2.tar.xz
+        sha256: aeb78d29291a2b5fd53cb55950f8f5065b4978c25fb1d77f627d695ab9adf21e
+  - name: qtsvg
+    buildsystem: cmake-ninja
+    build-options:
+      env:
+        CMAKE_PREFIX_PATH: /app
+    config-opts:
+      - -DCMAKE_INSTALL_PREFIX=/app
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DQT_BUILD_TESTS=OFF
+      - -DQT_BUILD_EXAMPLES=OFF
+    sources:
+      - type: archive
+        url: https://download.qt.io/official_releases/qt/6.10/6.10.2/submodules/qtsvg-everywhere-src-6.10.2.tar.xz
+        sha256: f07ff80f38caf235187200345392ca7479445ddf49a36c3694cd52a735dad6e1
+  - name: zenith-browser
+    buildsystem: cmake-ninja
+    build-options:
+      env:
+        CMAKE_PREFIX_PATH: /app
+    config-opts:
+      - -DCMAKE_INSTALL_PREFIX=/app
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DBUILD_TESTING=OFF
+    sources:
+      - type: dir
+        path: ..

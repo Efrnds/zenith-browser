@@ -210,7 +210,7 @@ install(FILES packaging/zenith-browser.desktop DESTINATION ${CMAKE_INSTALL_DATAD
 install(FILES resources/icons/zenith.svg DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps RENAME zenith-browser.svg)
 install(FILES resources/icons/zenith.png DESTINATION ${CMAKE_INSTALL_DATADIR}/pixmaps RENAME zenith-browser.png)
 install(FILES README.md DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/zenith-browser)
-install(FILES docs/VALIDATION.md docs/ROADMAP.md docs/OUTLOOK-COMPATIBILITY.md docs/MEMORY.md docs/ADBLOCK.md docs/SECURITY.md docs/APPEARANCE.md docs/RELEASE.md docs/PLANO-1.0.md docs/PREFERENCES.md docs/EXECUCAO-1.0.md DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/zenith-browser/docs)
+install(FILES docs/VALIDATION.md docs/ROADMAP.md docs/OUTLOOK-COMPATIBILITY.md docs/MEMORY.md docs/ADBLOCK.md docs/SECURITY.md docs/APPEARANCE.md docs/RELEASE.md docs/PLANO-1.0.md docs/PREFERENCES.md docs/EXECUCAO-1.0.md docs/PLATAFORMAS.md DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/zenith-browser/docs)
 set(CPACK_PACKAGE_VERSION ${ZENITH_RELEASE_VERSION})
 set(CPACK_PACKAGE_CONTACT "Zenith Browser")
 set(CPACK_GENERATOR TGZ)

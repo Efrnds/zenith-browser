@@ -61,7 +61,9 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationName(QStringLiteral("Zenith"));
     QCoreApplication::setOrganizationDomain(QStringLiteral("zenith.local"));
     QCoreApplication::setApplicationName(QStringLiteral("Zenith Browser"));
-    application.setDesktopFileName(QStringLiteral("zenith-browser"));
+    const QString flatpakDesktopId = qEnvironmentVariable("FLATPAK_ID");
+    application.setDesktopFileName(flatpakDesktopId.isEmpty()
+        ? QStringLiteral("zenith-browser") : flatpakDesktopId);
     QCoreApplication::setApplicationVersion(QStringLiteral(ZENITH_VERSION));
 
     QCommandLineParser parser;

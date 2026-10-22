@@ -1,5 +1,20 @@
 # Validação do Zenith
 
+## Verificação estável gráfica e CI — 22/10/2026
+
+A versão `1.0.0` passou na sessão gráfica de Eduardo (`20261022-111718`):
+72/72 testes sem skips, matriz de escala completa, TGZ estável empacotado e
+smoke test do executável empacotado aprovados. SHA-256 do TGZ:
+`8f0b24c00c929cdf129cc8cd1e17f661fcb29fc5a7fc268ccdd71f78b30be878`.
+As quatro conferências manuais listadas no JSON continuam fora da validação
+automatizada.
+
+No Actions, Release e Debug compilaram no Ubuntu 24.04, mas os processos
+`zenith-core-tests` terminaram com sinal 5 (`-5`) na suíte única. O workflow
+passou a executar cada caso Qt num processo separado. O modo isolado passou
+localmente em offscreen (56 aprovados, 0 falhas, 16 skips esperados); falta o
+resultado do próximo run no Ubuntu para confirmar o contorno lá.
+
 ## Correções após a falha gráfica — 22/10/2026
 
 A tentativa gráfica de 11:05 (`~/.cache/zenith-validation/20261022-110556`)
