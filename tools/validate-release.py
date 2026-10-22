@@ -32,6 +32,21 @@ def run(command, env, log, timeout=300):
         raise RuntimeError(f"Falha ({result.returncode}); confira {log}")
 
 
+def run_version(binary, env, output):
+    command = [binary, "--version"]
+    stderr_log = output.with_name(output.stem + "-stderr.log")
+    print("Executando:", " ".join(map(str, command)), flush=True)
+    with output.open("w") as stdout, stderr_log.open("w") as stderr:
+        result = subprocess.run(list(map(str, command)), env=env, stdout=stdout,
+                                stderr=stderr, timeout=20, check=False)
+    if result.returncode:
+        raise RuntimeError(f"Falha ({result.returncode}); confira {output} e {stderr_log}")
+    version = output.read_text().strip()
+    if not version.startswith("Zenith Browser ") or "\n" in version:
+        raise RuntimeError(f"Saída de versão inválida: {version!r}; confira {output} e {stderr_log}")
+    return version
+
+
 def isolated_test_run(binary, env, output):
     """Retry a signal-killed Qt/WebKit suite with one test slot per process."""
     functions_log = output / "test-functions.log"
@@ -197,8 +212,7 @@ def main():
                 env["ZENITH_REQUIRE_DISPLAY"] = "1"
                 env["ZENITH_BENCHMARK_OUTPUT"] = str(output / "benchmark.json")
             stage = "version"
-            run([binary, "--version"], env, output / "version.txt", 20)
-            report["version"] = (output / "version.txt").read_text().strip()
+            report["version"] = run_version(binary, env, output / "version.txt")
             report["binary_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
             stage = "tests"
             if args.isolate_tests:
@@ -266,9 +280,10 @@ def main():
                     if len(installed) != 1:
                         raise RuntimeError("Executável ausente no pacote")
                     stage = "package_version"
-                    run([installed[0], "--version"], env, output / "package-version.txt", 20)
-                    if (output / "package-version.txt").read_text().strip() != report["version"]:
-                        raise RuntimeError("Versões do pacote e da compilação divergem")
+                    package_version = run_version(installed[0], env, output / "package-version.txt")
+                    if package_version != report["version"]:
+                        raise RuntimeError(f"Versões do pacote e da compilação divergem: "
+                                           f"{package_version!r} != {report['version']!r}")
                     stage = "package_startup"
                     run([installed[0], "--private", "--smoke-test"], env, output / "package-startup.log", 25)
                     report["package"] = {"file": archive.name, "sha256": digest}

@@ -46,9 +46,9 @@ WebProfile::WebProfile(const QString &dataDirectory, const QString &cacheDirecto
     } else {
         const QByteArray identity = QFile::encodeName(QDir(dataDirectory).absolutePath());
         const QByteArray digest = QCryptographicHash::hash(identity, QCryptographicHash::Sha256).left(16);
-        const QByteArray uuid = QUuid::fromRfc4122(digest).toString(QUuid::WithoutBraces).toLatin1();
-        NSString *uuidText = [[NSString alloc] initWithBytes:uuid.constData()
-            length:static_cast<NSUInteger>(uuid.size()) encoding:NSASCIIStringEncoding];
+        const QByteArray uuidBytes = QUuid::fromRfc4122(digest).toString(QUuid::WithoutBraces).toLatin1();
+        NSString *uuidText = [[NSString alloc] initWithBytes:uuidBytes.constData()
+            length:static_cast<NSUInteger>(uuidBytes.size()) encoding:NSASCIIStringEncoding];
         NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:uuidText];
         native_->dataStore = [[WKWebsiteDataStore dataStoreForIdentifier:uuid] retain];
         [uuidText release];

@@ -135,6 +135,13 @@ endif()
 
 target_include_directories(zenith-browser PRIVATE src)
 target_compile_definitions(zenith-browser PRIVATE ZENITH_VERSION="${ZENITH_RELEASE_VERSION}")
+if(WIN32 AND CMAKE_GENERATOR_PLATFORM STREQUAL "ARM64" AND QT_HOST_PATH)
+    set_target_properties(zenith-browser PROPERTIES
+        AUTOMOC_EXECUTABLE "${QT_HOST_PATH}/bin/moc.exe"
+        AUTORCC_EXECUTABLE "${QT_HOST_PATH}/bin/rcc.exe"
+        AUTOUIC_EXECUTABLE "${QT_HOST_PATH}/bin/uic.exe"
+    )
+endif()
 
 target_link_libraries(zenith-browser PRIVATE
     Qt6::Widgets

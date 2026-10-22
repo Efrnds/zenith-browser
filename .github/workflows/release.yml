@@ -135,6 +135,16 @@ jobs:
           if (!(Test-Path 'webview2-sdk/build/native/include/WebView2.h')) { throw 'WebView2 headers missing from NuGet package' }
           $loader = "webview2-sdk/build/native/${{ matrix.arch }}/WebView2LoaderStatic.lib"
           if (!(Test-Path $loader)) { throw "WebView2 loader missing from NuGet package: $loader" }
+      - name: Install x64 Qt host tools for ARM64
+        if: matrix.arch == 'arm64'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          archives: qtbase qtsvg
+          cache: true
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
@@ -157,7 +167,14 @@ jobs:
       - name: Configure and verify tag
         shell: pwsh
         run: |
-          cmake -S . -B build -G "Visual Studio 17 2022" -A ${{ matrix.vs_arch }} -DBUILD_TESTING=OFF -DWEBVIEW2_SDK_DIR="$PWD/webview2-sdk"
+          $webview2Sdk = Join-Path $env:GITHUB_WORKSPACE 'webview2-sdk'
+          $qtArgs = @()
+          if ('${{ matrix.arch }}' -eq 'arm64') {
+            $qtHost = Join-Path (Split-Path $env:QT_ROOT_DIR -Parent) 'msvc2022_64'
+            if (!(Test-Path (Join-Path $qtHost 'bin/moc.exe'))) { throw "x64 Qt host tools missing: $qtHost" }
+            $qtArgs = @("-DQT_HOST_PATH=$qtHost", '-DQT_FORCE_FIND_TOOLS=ON')
+          }
+          cmake -S . -B build -G "Visual Studio 17 2022" -A ${{ matrix.vs_arch }} -DBUILD_TESTING=OFF "-DWEBVIEW2_SDK_DIR=$webview2Sdk" @qtArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $version = Get-Content build/zenith-version.txt -Raw
           if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$($version.Trim())") { throw "Tag does not match project version: $version" }

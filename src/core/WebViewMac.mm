@@ -22,7 +22,18 @@
 #undef signals
 #undef slots
 #import <AppKit/AppKit.h>
-#import <WebKit/WebKit.h>
+#import <WebKit/WKContentRuleList.h>
+#import <WebKit/WKContentWorld.h>
+#import <WebKit/WKNavigationAction.h>
+#import <WebKit/WKNavigationDelegate.h>
+#import <WebKit/WKScriptMessage.h>
+#import <WebKit/WKScriptMessageHandlerWithReply.h>
+#import <WebKit/WKUIDelegate.h>
+#import <WebKit/WKUserContentController.h>
+#import <WebKit/WKUserScript.h>
+#import <WebKit/WKWebView.h>
+#import <WebKit/WKWebViewConfiguration.h>
+#import <WebKit/WKWebsiteDataStore.h>
 
 #include <algorithm>
 #include <memory>

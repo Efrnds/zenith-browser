@@ -120,6 +120,16 @@ jobs:
           Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile WebView2RuntimeInstaller.exe
           $installer = Start-Process -FilePath "$PWD/WebView2RuntimeInstaller.exe" -ArgumentList '/silent', '/install' -Wait -PassThru
           if ($installer.ExitCode -ne 0 -and $installer.ExitCode -ne 3010) { throw "WebView2 Runtime installation failed: $($installer.ExitCode)" }
+      - name: Install x64 Qt host tools for ARM64
+        if: matrix.arch == 'arm64'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          archives: qtbase qtsvg
+          cache: true
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
@@ -136,7 +146,13 @@ jobs:
         shell: pwsh
         run: |
           $webview2Sdk = Join-Path $env:GITHUB_WORKSPACE 'webview2-sdk'
-          cmake -S . -B build -G "Visual Studio 17 2022" -A ${{ matrix.vs_arch }} -DBUILD_TESTING=OFF "-DWEBVIEW2_SDK_DIR=$webview2Sdk"
+          $qtArgs = @()
+          if ('${{ matrix.arch }}' -eq 'arm64') {
+            $qtHost = Join-Path (Split-Path $env:QT_ROOT_DIR -Parent) 'msvc2022_64'
+            if (!(Test-Path (Join-Path $qtHost 'bin/moc.exe'))) { throw "x64 Qt host tools missing: $qtHost" }
+            $qtArgs = @("-DQT_HOST_PATH=$qtHost", '-DQT_FORCE_FIND_TOOLS=ON')
+          }
+          cmake -S . -B build -G "Visual Studio 17 2022" -A ${{ matrix.vs_arch }} -DBUILD_TESTING=OFF "-DWEBVIEW2_SDK_DIR=$webview2Sdk" @qtArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build, deploy Qt, smoke test, and package
         shell: pwsh
