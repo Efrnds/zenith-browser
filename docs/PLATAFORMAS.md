@@ -1,40 +1,38 @@
-# Empacotamento e suporte por sistema
+# Build e suporte por sistema
 
-O backend atual combina Qt 6, WebKitGTK 4.1, GTK 3 e X11/XWayland. O alvo
-mantido hoje é Linux x86_64. A condição `WIN32`/`APPLE` no CMake não torna
-esses alvos portáveis: a integração do navegador e as chamadas GTK/X11 ainda
-são usadas diretamente pelo código compartilhado.
+O CMake seleciona um backend de navegação nativo por sistema e mantém o
+WebKitGTK no Linux, sem compilar nem carregar os outros motores nessa
+plataforma.
 
 ## Linux
 
-- **TGZ:** pacote atual do CPack; usa as dependências instaladas pelo sistema.
-- **Flatpak:** o workflow de release constrói e testa um bundle usando
-  `org.gnome.Platform` 50. Como esse runtime inclui WebKitGTK e o app depende
-  de Qt, Qt Base e Qt SVG 6.10.2 são compilados dentro do Flatpak. O bundle
-  ainda depende de baixar o runtime GNOME na instalação.
-- **AppImage:** não faz parte dos artefatos de release. O WebKitGTK procura
-  seus processos auxiliares em caminhos definidos na compilação. Relocar esses
-  arquivos para um AppDir sem quebrar o sandbox e sem depender do WebKitGTK do
-  host ainda precisa de uma estratégia testada em mais de uma distribuição.
+- Requer Qt 6.4+, WebKitGTK 4.1 (2.40+), GTK 3, X11/XWayland e libsecret.
+- CPack gera o TGZ. O workflow também valida Flatpak e AppImage antes de
+  publicar a release.
 
-## Windows e macOS
+## Windows
 
-Ainda não há `.exe` nem `.dmg`. O CMake exige `webkit2gtk-4.1` e X11 sem
-condicioná-los ao sistema; `WebView`, áreas GTK incorporadas, clipboard e
-atalhos também usam APIs WebKitGTK diretamente. Criar jobs de CI para Windows
-ou macOS agora produziria builds que falham ou binários sem navegador.
+- Requer Qt 6.4+, Visual Studio 2022 x64, o pacote NuGet
+  `Microsoft.Web.WebView2` e o runtime Evergreen WebView2 instalado na máquina.
+- Configure com `-DWEBVIEW2_SDK_DIR=<diretório-do-pacote-NuGet>`; o caminho deve
+  conter `build/native/include/WebView2.h` e
+  `build/native/x64/WebView2LoaderStatic.lib`.
+- O workflow baixa o SDK fixado, configura o CMake, compila, executa `--version`
+  e um smoke test privado, depois empacota os binários Qt num ZIP.
 
-O port deve introduzir uma interface comum para navegação, downloads, sessão,
-perfis, permissões, busca na página e bloqueio de conteúdo, mantendo
-implementações específicas por sistema:
+## macOS
 
-- Linux: backend WebKitGTK atual, preservando consumo e arquitetura de
-  processos.
-- Windows: backend WebView2, com verificação do runtime Evergreen e um pacote
-  instalável que não distribua um segundo motor Chromium completo.
-- macOS: backend WKWebView via Objective-C++ e integração de `NSView` com Qt.
+- Requer Qt 6.4+ e Xcode Command Line Tools. O CMake habilita Objective-C++20
+  para o backend WKWebView e gera o bundle `.app`.
+- O workflow configura, compila, executa `--version` e um smoke test privado,
+  incorpora as bibliotecas Qt com `macdeployqt` e empacota um DMG.
 
-Cada backend precisa passar navegação, formulários, downloads, adblock,
-cookies, credenciais, áudio/vídeo, clipboard, janelas privadas e suspensão de
-abas antes de ser anunciado como compatível. O CI só deve publicar `.exe` e
-`.dmg` depois que esses testes rodarem nos respectivos runners.
+## Limites conhecidos dos backends nativos
+
+Os jobs de release devem compilar e iniciar cada backend antes de publicar. O
+build não demonstra paridade completa de recursos: em particular, políticas de
+privacidade e exceções de certificado ainda precisam ser implementadas e
+validadas para Windows/macOS; o fluxo de download no WKWebView também precisa
+ser concluído. Não anuncie esses sistemas como equivalentes ao Linux até cobrir
+navegação, perfis privados, adblock, downloads, credenciais, áudio/vídeo,
+clipboard e suspensão de abas em testes nativos.

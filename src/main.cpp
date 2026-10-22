@@ -20,15 +20,17 @@
 #include <QTranslator>
 #include <QLibraryInfo>
 
+#ifdef Q_OS_LINUX
 #undef signals
 #undef slots
 #include <gtk/gtk.h>
-
 #include <X11/Xlib.h>
+#endif
 
 namespace {
 bool prepareWebKitHost()
 {
+#ifdef Q_OS_LINUX
     // WebKitGTK is a GTK widget. Qt on Wayland cannot reparent it, so the
     // window goes through XWayland, where a GtkPlug can sit inside the view.
     XInitThreads();
@@ -45,6 +47,9 @@ bool prepareWebKitHost()
     const bool available = ThemeManager::initializeGtk();
     if (!available) qputenv("QT_QPA_PLATFORM", "offscreen");
     return available;
+#else
+    return true;
+#endif
 }
 
 }
@@ -67,7 +72,7 @@ int main(int argc, char *argv[])
     QCoreApplication::setApplicationVersion(QStringLiteral(ZENITH_VERSION));
 
     QCommandLineParser parser;
-    parser.setApplicationDescription(QStringLiteral("Zenith Browser · Qt / WebKitGTK"));
+    parser.setApplicationDescription(QStringLiteral("Zenith Browser"));
     parser.addHelpOption();
     parser.addVersionOption();
     parser.addOption({"private", QStringLiteral("Janela privada sem persistência de navegação")});

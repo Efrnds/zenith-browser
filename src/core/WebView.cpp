@@ -1343,6 +1343,11 @@ void WebView::setMessageHandler(MessageHandler handler)
         content, "credentials", "zenith-credentials");
 }
 
+QString WebView::dispatchPlatformMessage(const QString &message)
+{
+    return impl_->messageHandler ? impl_->messageHandler(message) : QString();
+}
+
 #include "WebView.moc"
 
 void WebView::applyBrowsingPreferences()

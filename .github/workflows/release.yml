@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,19 +13,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  validate:
+  linux:
+    name: Linux (TGZ, Flatpak, AppImage)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config qt6-base-dev libqt6svg6-dev libwebkit2gtk-4.1-dev libsecret-1-dev libx11-dev xvfb dbus-x11 libxcb-cursor0 flatpak flatpak-builder
+          sudo apt-get install -y cmake ninja-build pkg-config qt6-base-dev libqt6svg6-dev libwebkit2gtk-4.1-dev libsecret-1-dev libx11-dev xvfb dbus-x11 libxcb-cursor0 flatpak flatpak-builder file fuse libfuse2
       - name: Configure and verify tag
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-          test "$GITHUB_REF_NAME" = "v$(cat build/zenith-version.txt)"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then test "$GITHUB_REF_NAME" = "v$(cat build/zenith-version.txt)"; fi
       - name: Build
         run: cmake --build build --parallel 2
       - name: Unit and browser integration tests
@@ -36,7 +38,6 @@ jobs:
           flatpak-builder --user --force-clean --disable-rofiles-fuse --install-deps-from=flathub \
             --repo=flatpak-repo flatpak-build packaging/io.github.efrnds.ZenithBrowser.yml
           version=$(cat build/zenith-version.txt)
-          mkdir -p build/validation/packages
           flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
             flatpak-repo "build/validation/packages/ZenithBrowser-${version}-Linux.flatpak" \
             io.github.efrnds.ZenithBrowser stable
@@ -44,7 +45,35 @@ jobs:
             "build/validation/packages/ZenithBrowser-${version}-Linux.flatpak"
           flatpak run io.github.efrnds.ZenithBrowser --version
           dbus-run-session -- xvfb-run -a flatpak run io.github.efrnds.ZenithBrowser --private --smoke-test
-          (cd build/validation/packages && sha256sum ZenithBrowser-* > SHA256SUMS)
+      - name: Build AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          version=$(cat build/zenith-version.txt)
+          appdir="$PWD/build/appimage/AppDir"
+          mkdir -p "$appdir"
+          DESTDIR="$appdir" cmake --install build --prefix /usr
+          install -Dm644 packaging/zenith-browser.desktop "$appdir/usr/share/applications/zenith-browser.desktop"
+          install -Dm644 resources/icons/zenith.png "$appdir/usr/share/icons/hicolor/256x256/apps/zenith-browser.png"
+          curl -fsSL -o linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          curl -fsSL -o linuxdeploy-plugin-qt-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
+          ./linuxdeploy-x86_64.AppImage --appimage-extract-and-run \
+            --appdir "$appdir" \
+            --executable "$appdir/usr/bin/zenith-browser" \
+            --desktop-file "$appdir/usr/share/applications/zenith-browser.desktop" \
+            --icon-file "$appdir/usr/share/icons/hicolor/256x256/apps/zenith-browser.png" \
+            --plugin qt \
+            --output appimage
+          appimage=$(find . -maxdepth 1 -type f -name '*.AppImage' \
+            ! -name 'linuxdeploy-x86_64.AppImage' ! -name 'linuxdeploy-plugin-qt-x86_64.AppImage' -print -quit)
+          test -n "$appimage"
+          mv "$appimage" "build/validation/packages/ZenithBrowser-${version}-x86_64.AppImage"
+          chmod +x "build/validation/packages/ZenithBrowser-${version}-x86_64.AppImage"
+          "build/validation/packages/ZenithBrowser-${version}-x86_64.AppImage" --version
+          dbus-run-session -- xvfb-run -a "build/validation/packages/ZenithBrowser-${version}-x86_64.AppImage" --private --smoke-test
       - name: Sanitizers
         env:
           ASAN_OPTIONS: detect_leaks=0
@@ -52,35 +81,142 @@ jobs:
           cmake -S . -B sanitize -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DZENITH_SANITIZERS=ON
           cmake --build sanitize --parallel 2
           dbus-run-session -- xvfb-run -a python3 tools/validate-release.py --build sanitize --output sanitize/validation --isolate-tests
+      - name: Checksums
+        working-directory: build/validation/packages
+        run: sha256sum ZenithBrowser-* > SHA256SUMS-linux
       - uses: actions/upload-artifact@v4
         with:
           name: release-linux
           if-no-files-found: error
           path: |
-            build/validation/packages/ZenithBrowser-*.tar.gz
-            build/validation/packages/ZenithBrowser-*.flatpak
-            build/validation/packages/SHA256SUMS
+            build/validation/packages/ZenithBrowser-*
+            build/validation/packages/SHA256SUMS-linux
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: release-test-logs
+          name: release-linux-test-logs
           path: |
             build/validation/
             sanitize/validation/
-  draft:
-    needs: validate
+
+  windows:
+    name: Windows (ZIP)
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install WebView2 SDK
+        shell: pwsh
+        run: |
+          $version = '1.0.4258.31'
+          $package = "Microsoft.Web.WebView2.$version.nupkg"
+          $url = "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/$version/$package"
+          Invoke-WebRequest -Uri $url -OutFile $package
+          New-Item -ItemType Directory -Force webview2-sdk | Out-Null
+          $archive = "Microsoft.Web.WebView2.$version.zip"
+          Move-Item -Path $package -Destination $archive
+          Expand-Archive -Path $archive -DestinationPath webview2-sdk -Force
+          if (!(Test-Path 'webview2-sdk/build/native/include/WebView2.h')) { throw 'WebView2 headers missing from NuGet package' }
+          if (!(Test-Path 'webview2-sdk/build/native/x64/WebView2LoaderStatic.lib')) { throw 'WebView2 x64 loader missing from NuGet package' }
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: qtsvg
+          cache: true
+      - name: Configure and verify tag
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=OFF -DWEBVIEW2_SDK_DIR="$PWD/webview2-sdk"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $version = Get-Content build/zenith-version.txt -Raw
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$($version.Trim())") { throw "Tag does not match project version: $version" }
+      - name: Build and package
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --install build --config Release --prefix build/stage
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          windeployqt --release --compiler-runtime build/stage/bin/zenith-browser.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ".\build\stage\bin\zenith-browser.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ".\build\stage\bin\zenith-browser.exe" --private --smoke-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force build/packages | Out-Null
+          $version = (Get-Content build/zenith-version.txt -Raw).Trim()
+          Compress-Archive -Path build/stage/* -DestinationPath "build/packages/ZenithBrowser-$version-Windows-x64.zip" -Force
+          Get-FileHash build/packages/* -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([System.IO.Path]::GetFileName($_.Path))" } | Set-Content build/packages/SHA256SUMS-windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          if-no-files-found: error
+          path: build/packages/*
+
+  macos:
+    name: macOS (DMG)
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: mac
+          target: desktop
+          arch: clang_64
+          modules: qtsvg
+          cache: true
+      - name: Configure and verify tag
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then test "$GITHUB_REF_NAME" = "v$(cat build/zenith-version.txt)"; fi
+      - name: Build and package
+        run: |
+          cmake --build build --parallel 2
+          ./build/zenith-browser.app/Contents/MacOS/zenith-browser --version
+          ./build/zenith-browser.app/Contents/MacOS/zenith-browser --private --smoke-test
+          mkdir -p build/packages
+          macdeployqt "$PWD/build/zenith-browser.app" -always-overwrite -dmg
+          dmg=$(find . -maxdepth 1 -type f -name '*.dmg' -print -quit)
+          test -n "$dmg"
+          mv "$dmg" "build/packages/ZenithBrowser-$(cat build/zenith-version.txt)-macOS.dmg"
+          (cd build/packages && shasum -a 256 ZenithBrowser-* > SHA256SUMS-macos)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          if-no-files-found: error
+          path: build/packages/*
+
+  publish:
+    name: Publish GitHub Release
+    needs: [linux, windows, macos]
+    if: success() && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: release-linux
+          pattern: release-*
           path: artifacts
-      - name: Verify artifacts
-        working-directory: artifacts
-        run: sha256sum --check SHA256SUMS
-      - name: Create release draft
+          merge-multiple: false
+      - name: Verify every package checksum
+        run: |
+          for platform in linux windows macos; do
+            (cd "artifacts/release-${platform}" && sha256sum --check "SHA256SUMS-${platform}")
+          done
+          test -n "$(find artifacts/release-linux -maxdepth 1 -name '*.tar.gz' -print -quit)"
+          test -n "$(find artifacts/release-linux -maxdepth 1 -name '*.flatpak' -print -quit)"
+          test -n "$(find artifacts/release-linux -maxdepth 1 -name '*.AppImage' -print -quit)"
+          test -n "$(find artifacts/release-windows -maxdepth 1 -name '*.zip' -print -quit)"
+          test -n "$(find artifacts/release-macos -maxdepth 1 -name '*.dmg' -print -quit)"
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -88,4 +224,19 @@ jobs:
         run: |
           release_flags=()
           if [[ "$RELEASE_TAG" == *-* ]]; then release_flags+=(--prerelease); fi
-          gh release create "$RELEASE_TAG" artifacts/ZenithBrowser-*.tar.gz artifacts/ZenithBrowser-*.flatpak artifacts/SHA256SUMS --verify-tag --draft --title "Zenith $RELEASE_TAG" --generate-notes "${release_flags[@]}"
+          assets=(artifacts/release-linux/ZenithBrowser-* artifacts/release-linux/SHA256SUMS-linux \
+            artifacts/release-windows/ZenithBrowser-* artifacts/release-windows/SHA256SUMS-windows \
+            artifacts/release-macos/ZenithBrowser-* artifacts/release-macos/SHA256SUMS-macos)
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+            edit_flags=(--draft=false --title "Zenith $RELEASE_TAG")
+            if [[ "$RELEASE_TAG" == *-* ]]; then
+              edit_flags+=(--prerelease)
+            else
+              edit_flags+=(--prerelease=false)
+            fi
+            gh release edit "$RELEASE_TAG" "${edit_flags[@]}"
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" --verify-tag \
+              --title "Zenith $RELEASE_TAG" --generate-notes "${release_flags[@]}"
+          fi

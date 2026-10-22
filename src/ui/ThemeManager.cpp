@@ -11,12 +11,15 @@
 #include <QFocusEvent>
 #include <QStyle>
 #include <cmath>
+#ifdef Q_OS_LINUX
 #undef signals
 #undef slots
 #include <gtk/gtk.h>
+#endif
 
 bool ThemeManager::initializeGtk()
 {
+#ifdef Q_OS_LINUX
     // WebKit reads GTK_THEME ahead of prefer-dark, so keep the override as a
     // GtkSettings value instead. Do this before GTK or Qt starts worker threads.
     const QByteArray override = qgetenv("GTK_THEME");
@@ -31,6 +34,9 @@ bool ThemeManager::initializeGtk()
             "gtk-application-prefer-dark-theme", dark, nullptr);
     }
     return available;
+#else
+    return true;
+#endif
 }
 
 ThemeManager &ThemeManager::instance()
@@ -52,6 +58,7 @@ ThemeManager::ThemeManager()
         apply();
     });
 #endif
+#ifdef Q_OS_LINUX
     if (auto *gtk = gtk_settings_get_default()) {
         gboolean dark = FALSE;
         gchar *theme = nullptr, *hint = nullptr, *rgba = nullptr;
@@ -63,6 +70,7 @@ ThemeManager::ThemeManager()
         hintStyle_ = QString::fromUtf8(hint); rgba_ = QString::fromUtf8(rgba);
         g_free(theme); g_free(hint); g_free(rgba);
     }
+#endif
 }
 
 bool ThemeManager::eventFilter(QObject *watched, QEvent *event)
@@ -148,6 +156,7 @@ QColor ThemeManager::color(const QString &key) const
 
 void ThemeManager::applyWebAppearance()
 {
+#ifdef Q_OS_LINUX
     auto *gtk = gtk_settings_get_default();
     if (!gtk) return;
     if (siteMode_ == "system") {
@@ -167,6 +176,7 @@ void ThemeManager::applyWebAppearance()
             "gtk-xft-hintstyle", textRendering_ == "sharp" ? "hintfull" : "hintslight",
             "gtk-xft-rgba", "none", nullptr);
     }
+#endif
 }
 
 void ThemeManager::apply()

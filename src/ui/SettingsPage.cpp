@@ -757,13 +757,24 @@ QWidget *SettingsPage::makeAboutPage()
 {
     auto *page = new QWidget;
     auto *layout = pageLayout(page, tr("Sobre"),
-                              tr("Zenith Browser, interface C++20 com WebKitGTK."));
+                              tr("Zenith Browser, interface C++20 com motor web nativo da plataforma."));
     auto *version = new QLabel(tr("Versão %1").arg(QCoreApplication::applicationVersion()), page);
     version->setObjectName(QStringLiteral("settingsStatus"));
     auto *identity = PageWidgets::section(layout, tr("Zenith Browser"), tr("Abas verticais, espaços e uma interface nativa para navegar."));
     identity->addWidget(version);
-    auto *engine = new QLabel(tr("Qt %1\nWebKitGTK %2\n%3\nHost gráfico: X11 / XWayland")
-        .arg(QString::fromLatin1(qVersion()), WebProfile::engineVersion(), QSysInfo::currentCpuArchitecture()), page);
+#if defined(Q_OS_WIN)
+    const QString engineName = QStringLiteral("Microsoft Edge WebView2");
+    const QString windowHost = tr("Host gráfico: Windows");
+#elif defined(Q_OS_MACOS)
+    const QString engineName = QStringLiteral("Apple WKWebView");
+    const QString windowHost = tr("Host gráfico: macOS");
+#else
+    const QString engineName = QStringLiteral("WebKitGTK");
+    const QString windowHost = tr("Host gráfico: X11 / XWayland");
+#endif
+    auto *engine = new QLabel(tr("Qt %1\n%2 %3\n%4\n%5")
+        .arg(QString::fromLatin1(qVersion()), engineName, WebProfile::engineVersion(),
+             QSysInfo::currentCpuArchitecture(), windowHost), page);
     engine->setWordWrap(true);
     engine->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
     auto *technical = PageWidgets::section(layout, tr("Informações do aplicativo"));

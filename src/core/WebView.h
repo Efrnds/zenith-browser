@@ -69,6 +69,7 @@ public:
     void setPopupFactory(PopupFactory factory);
     void installPageScript(const QString &source);
     void setMessageHandler(MessageHandler handler);
+    QString dispatchPlatformMessage(const QString &message);
 
 signals:
     void urlChanged(const QUrl &url);

@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.22)
 
 project(ZenithBrowser VERSION 1.0.0 LANGUAGES CXX)
+if(APPLE)
+    enable_language(OBJCXX)
+    set(CMAKE_OBJCXX_STANDARD 20)
+    set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+    set(CMAKE_OBJCXX_EXTENSIONS OFF)
+endif()
 set(ZENITH_VERSION_SUFFIX "" CACHE STRING "Release suffix; empty for a stable release")
 set(ZENITH_RELEASE_VERSION "${PROJECT_VERSION}${ZENITH_VERSION_SUFFIX}")
 file(WRITE "${CMAKE_BINARY_DIR}/zenith-version.txt" "${ZENITH_RELEASE_VERSION}\n")
@@ -18,13 +24,29 @@ find_package(Qt6 6.4 REQUIRED COMPONENTS
     Svg
     Network
     Concurrent
-    DBus
     Sql
 )
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(WEBKITGTK REQUIRED IMPORTED_TARGET webkit2gtk-4.1>=2.40)
-find_package(X11 REQUIRED)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Qt6 6.4 REQUIRED COMPONENTS DBus)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(WEBKITGTK REQUIRED IMPORTED_TARGET webkit2gtk-4.1>=2.40)
+    find_package(X11 REQUIRED)
+elseif(WIN32)
+    set(WEBVIEW2_SDK_DIR "" CACHE PATH "Microsoft.Web.WebView2 NuGet package root")
+    if(NOT WEBVIEW2_SDK_DIR)
+        message(FATAL_ERROR "Set WEBVIEW2_SDK_DIR to the extracted Microsoft.Web.WebView2 NuGet package")
+    endif()
+    find_path(WEBVIEW2_INCLUDE_DIR WebView2.h PATHS "${WEBVIEW2_SDK_DIR}/build/native/include" NO_DEFAULT_PATH REQUIRED)
+    find_library(WEBVIEW2_LOADER_LIBRARY WebView2LoaderStatic
+        PATHS "${WEBVIEW2_SDK_DIR}/build/native/x64" "${WEBVIEW2_SDK_DIR}/build/native/x86" NO_DEFAULT_PATH REQUIRED)
+elseif(APPLE)
+    find_library(WEBKIT_FRAMEWORK WebKit REQUIRED)
+    find_library(APPKIT_FRAMEWORK AppKit REQUIRED)
+    find_library(SECURITY_FRAMEWORK Security REQUIRED)
+else()
+    message(FATAL_ERROR "Zenith supports Linux, Windows, and macOS only")
+endif()
 
 qt_standard_project_setup()
 
@@ -36,13 +58,12 @@ endif()
 
 qt_add_executable(zenith-browser
     src/core/Preferences.cpp
-    src/core/GtkClipboardGuard.cpp
     src/core/Navigation.cpp
     src/core/SessionStore.cpp
     src/core/BrowserData.cpp
     src/core/BookmarkCodec.cpp
     src/core/DownloadManager.h
-    src/core/DownloadManager.cpp
+    src/core/DownloadManagerShared.cpp
     src/main.cpp
     src/ui/ThemeManager.cpp
     src/ui/BrowserMenu.cpp
@@ -64,9 +85,7 @@ qt_add_executable(zenith-browser
     src/core/CredentialManager.h
     src/core/CredentialManager.cpp
     src/core/WebProfile.h
-    src/core/WebProfile.cpp
     src/core/WebView.h
-    src/core/WebView.cpp
     src/ui/MainWindow.h
     src/ui/MainWindow.cpp
     src/ui/MainWindowTools.cpp
@@ -86,6 +105,27 @@ qt_add_executable(zenith-browser
     resources/resources.qrc
 )
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(zenith-browser PRIVATE
+        src/core/GtkClipboardGuard.cpp
+        src/core/DownloadManager.cpp
+        src/core/WebProfile.cpp
+        src/core/WebView.cpp
+    )
+elseif(WIN32)
+    target_sources(zenith-browser PRIVATE
+        src/core/DownloadManagerNative.cpp
+        src/core/WebProfileWindows.cpp
+        src/core/WebViewWindows.cpp
+    )
+elseif(APPLE)
+    target_sources(zenith-browser PRIVATE
+        src/core/DownloadManagerNative.cpp
+        src/core/WebProfileMac.mm
+        src/core/WebViewMac.mm
+    )
+endif()
+
 target_include_directories(zenith-browser PRIVATE src)
 target_compile_definitions(zenith-browser PRIVATE ZENITH_VERSION="${ZENITH_RELEASE_VERSION}")
 
@@ -94,15 +134,19 @@ target_link_libraries(zenith-browser PRIVATE
     Qt6::Svg
     Qt6::Network
     Qt6::Concurrent
-    Qt6::DBus
     Qt6::Sql
-    PkgConfig::WEBKITGTK
-    X11::X11
-    ${CMAKE_DL_LIBS}
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(zenith-browser PRIVATE Qt6::DBus PkgConfig::WEBKITGTK X11::X11 ${CMAKE_DL_LIBS})
     target_link_options(zenith-browser PRIVATE "LINKER:--export-dynamic-symbol=gtk_clipboard_request_targets")
+elseif(WIN32)
+    target_include_directories(zenith-browser PRIVATE "${WEBVIEW2_INCLUDE_DIR}")
+    target_link_libraries(zenith-browser PRIVATE Advapi32 Ole32 Shlwapi Version "${WEBVIEW2_LOADER_LIBRARY}")
+    set_target_properties(zenith-browser PROPERTIES WIN32_EXECUTABLE TRUE)
+elseif(APPLE)
+    target_link_libraries(zenith-browser PRIVATE "${WEBKIT_FRAMEWORK}" "${APPKIT_FRAMEWORK}" "${SECURITY_FRAMEWORK}")
+    set_target_properties(zenith-browser PROPERTIES MACOSX_BUNDLE TRUE)
 endif()
 
 include(CheckIPOSupported)
@@ -114,19 +158,13 @@ if(NOT MSVC)
     target_link_options(zenith-browser PRIVATE "$<$<CONFIG:Release>:-s>")
 endif()
 
-if(WIN32)
-    target_link_libraries(zenith-browser PRIVATE Advapi32)
-    set_target_properties(zenith-browser PROPERTIES WIN32_EXECUTABLE TRUE)
-elseif(APPLE)
-    target_link_libraries(zenith-browser PRIVATE "-framework Security")
-    set_target_properties(zenith-browser PROPERTIES MACOSX_BUNDLE TRUE)
-elseif(UNIX)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     pkg_check_modules(LIBSECRET REQUIRED IMPORTED_TARGET libsecret-1)
     target_link_libraries(zenith-browser PRIVATE PkgConfig::LIBSECRET)
 endif()
 
 include(CTest)
-if(BUILD_TESTING)
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Qt6 REQUIRED COMPONENTS Test)
     qt_add_executable(zenith-core-tests
         src/core/Preferences.cpp
@@ -155,6 +193,7 @@ if(BUILD_TESTING)
         src/core/BrowserData.cpp
         src/core/BookmarkCodec.cpp
         src/core/DownloadManager.h
+        src/core/DownloadManagerShared.cpp
         src/core/DownloadManager.cpp
         tests/CoreTests.cpp
         src/core/TabManager.h

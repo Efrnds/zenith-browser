@@ -1,27 +1,29 @@
 # Release 1.0
 
-A fonte local agora está configurada como **1.0.0**; a última candidata RC4
-passou na validação gráfica e no pacote extraído.
-O TGZ contém o executável e a documentação; depende de Qt, WebKitGTK, libsecret
-e X11 instalados. O workflow também gera um Flatpak com o runtime GNOME 50. O
-TGZ e o Flatpak do GitHub são compilados no Ubuntu 24.04 x86_64. Veja a matriz
-de alvos em [PLATAFORMAS.md](PLATAFORMAS.md).
+A fonte local está configurada como **1.0.0**. A tag estável precisa passar
+pela validação descrita abaixo. O TGZ depende de Qt, WebKitGTK, libsecret e X11
+instalados. Veja a matriz de alvos em [PLATAFORMAS.md](PLATAFORMAS.md).
 
 ## Fluxo do GitHub
 
-O arquivo `.github/workflows/release.yml` responde a tags `v*`:
+O arquivo `.github/workflows/release.yml` responde a tags `v*` e tenta gerar
+TGZ, Flatpak e AppImage no Linux, ZIP no Windows e DMG no macOS:
 
 1. Compila Release e confere se a tag coincide com `zenith-version.txt`, gerado
    pelo CMake. Uma tag diferente da versão do código interrompe o fluxo.
 2. Roda testes de unidade e integração em Xvfb com `ZENITH_REQUIRE_DISPLAY=1`.
    Isso impede que a ausência de display transforme a rodada gráfica em sucesso.
 3. Executa o smoke test em perfil temporário e testes com ASan/UBSan.
-4. Gera o TGZ e Flatpak, calcula `SHA256SUMS` e disponibiliza os logs como
-   artefato separado.
-5. Confere os hashes e cria um rascunho da Release, marcado como pré-lançamento
-   quando a tag contém sufixo. Apenas esse último job recebe `contents: write`.
+4. Gera e testa os pacotes Linux (TGZ, Flatpak e AppImage), além de tentar
+   compilar e empacotar Windows e macOS. Cada job disponibiliza seus artefatos
+   e checksums.
+5. Só inicia a publicação quando os três jobs de plataforma passam. O job
+   final confere os checksums e exige os cinco formatos; qualquer falha impede
+   a publicação. Tags com sufixo são publicadas como pré-lançamento. Apenas
+   esse job recebe `contents: write`.
 
-Depois de revisar e enviar o código ao repositório, a candidata pode ser criada:
+Depois de revisar e enviar o código ao repositório, uma tag inicia a validação
+e publica a release automaticamente se todos os alvos passarem:
 
 ```sh
 git tag -a v1.0.0-rc.4 -m 'Zenith 1.0.0-rc.4'
@@ -30,8 +32,10 @@ git push origin v1.0.0-rc.4
 
 Esses comandos não foram executados nesta revisão. O workflow foi preparado
 localmente; seu resultado só pode ser confirmado depois da execução no GitHub.
-O rascunho fica disponível em Releases para conferir os arquivos e publicar.
-O comportamento de `--draft`, `--verify-tag` e `--prerelease` segue o
+A versão atual ainda exige WebKitGTK e X11 diretamente, então os jobs
+Windows/macOS devem falhar na configuração até existirem backends WebView2 e
+WKWebView. Esse bloqueio é intencional: enquanto faltar qualquer alvo, a
+release não será publicada. O comportamento de `--verify-tag` e `--prerelease` segue o
 [manual do GitHub CLI](https://cli.github.com/manual/gh_release_create).
 As permissões seguem a
 [documentação do GITHUB_TOKEN](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token).
@@ -119,8 +123,9 @@ git tag -a v1.0.0 -m 'Zenith 1.0.0'
 git push origin v1.0.0
 ```
 
-O Actions cria um rascunho somente após os testes. Conferir os artefatos e o
-pacote gerado no Ubuntu antes de clicar em **Publish release** no GitHub.
+O Actions publica automaticamente somente depois de todos os builds e testes
+passarem. Até os ports nativos de Windows/macOS serem implementados, a tag
+estável não poderá ser publicada por esse fluxo.
 
 ## Escopo desta candidata
 
