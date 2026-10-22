@@ -22,6 +22,7 @@ public:
     void setActive(bool active);
     void setLeading(int leading);
     void syncPointer();
+    bool isActive() const { return active_; }
 
 signals:
     void activated(int tabId);

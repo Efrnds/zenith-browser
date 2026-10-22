@@ -1,5 +1,15 @@
 #include "ui/SettingsPage.h"
+#include "ProcessMetrics.h"
+#include "ui/LibraryPage.h"
+#include "ui/InternalPageStack.h"
+#include "core/Preferences.h"
+#include "ui/MainWindow.h"
+#include "ui/FindBar.h"
+#include <QSpinBox>
+#include <QScopeGuard>
 #include "ui/BrowserMenu.h"
+#include "ui/StartPage.h"
+#include "ui/PageWidgets.h"
 #include "ui/ThemeManager.h"
 #include "core/AdBlockRuleParser.h"
 #include "core/AdBlockInterceptor.h"
@@ -18,10 +28,21 @@
 #include "ui/TabItemWidget.h"
 
 #include <QApplication>
+#include <QAccessible>
 #include <cmath>
+#include <memory>
 #include <QPalette>
 #include <QTabBar>
 #include <QMenu>
+#include <QMainWindow>
+#include <QStackedWidget>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QCheckBox>
+#include <QLabel>
+#include <QStyle>
+#include <QTranslator>
+#include <QLibraryInfo>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QPushButton>
@@ -32,6 +53,9 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QKeySequence>
+#include <QRegularExpression>
+#include <QTextDocument>
 #include <QLineEdit>
 #include <QComboBox>
 #include <QTcpServer>
@@ -41,14 +65,20 @@
 #include <QPersistentModelIndex>
 #include <QListWidget>
 #include <QDialog>
+#include <QMessageBox>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSaveFile>
+#include <QClipboard>
+#include <dlfcn.h>
 
 #undef signals
 #undef slots
 #include <gtk/gtk.h>
+#include <gtk/gtkx.h>
 #include <webkit2/webkit2.h>
+#include "core/GtkClipboardGuard.h"
 #define signals Q_SIGNALS
 #define slots Q_SLOTS
 
@@ -64,11 +94,33 @@ class CoreTests final : public QObject
     Q_OBJECT
 
 private slots:
+    void preservesInternalNavigation();
+    void restoresOnlyCategoryPreferences();
+    void migratesWorkspaceContents();
+    void editsSelectedWorkspace();
+    void appliesDensityPresets();
+    void fitsWorkspaceHeadingToSidebar();
+    void reportsMissingDownload();
+    void keepsCustomAccentReadable();
+    void preservesLibrarySelectionAcrossPages();
+    void ignoresStaleLibrarySearch();
+    void editsAndOpensLibraryEntries();
+    void reportsLibraryReadFailure();
+    void restoresInternalFocus();
+    void findsCollapsedPreferenceAndRestoresPosition();
+    void checksThemeRoleContrast();
+    void exposesAccessibleTabActions();
+    void inventoriesAndResetsPreferenceControls();
+    void laysOutLibrariesAtLargeText();
+    void confirmsFullHistoryClearWithActiveSearch();
+    void treatsExternalTooltipContentAsText();
+    void benchmarksBrowserWorkflows();
     void parsesNetworkRules();
     void matchesAdDomainsAndExceptions();
     void rejectsCrossOriginCredentials();
     void serializesWebHistory();
     void reloadsDiscardedTabsRepeatedly();
+    void destroysProfilesWithPendingCookies();
     void resolvesNavigation();
     void persistsBrowserData();
     void recoversAtomicSession();
@@ -78,6 +130,17 @@ private slots:
     void switchesWorkspacesByKeyboard();
     void changesAppearanceAndCapturesThemes();
     void organizesBrowserCommands();
+    void usesNativeStartPage();
+    void defersNativeBlankTabs();
+    void laysOutInternalScreens();
+    void searchesAndRefreshesPreferences();
+    void customizesBrowserDimensions();
+    void embedsFindBar();
+    void embedsBrowserTools();
+    void preservesAutomaticDownloadNames();
+    void handlesFailedClipboardTargets();
+    void pastesIntoNativeInputs();
+    void opensMiddleClickInBackground();
     void configuresWebRendering();
     void roundTripsBookmarks();
     void downloadsAfterClosingView();
@@ -102,6 +165,657 @@ private slots:
     void resumesFindAfterClosingSearch();
     void ordersTabsLikeSidebar();
 };
+
+void CoreTests::preservesInternalNavigation()
+{
+    QStackedWidget host;
+    auto *root = new QWidget;
+    host.addWidget(root);
+    InternalPageStack navigation(&host, root);
+    auto *settings = new QWidget;
+    settings->setObjectName("settings");
+    auto *layout = new QVBoxLayout(settings);
+    auto *query = new QLineEdit;
+    layout->addWidget(query);
+    navigation.keep(settings);
+    navigation.open(settings);
+    query->setText("texto preservado");
+    auto *downloads = new QWidget;
+    downloads->setObjectName("downloads");
+    navigation.open(downloads);
+    QCOMPARE(navigation.depth(), 2);
+    navigation.back();
+    QCOMPARE(host.currentWidget(), settings);
+    QCOMPARE(query->text(), QString("texto preservado"));
+    navigation.open(new QWidget);
+    auto *duplicate = new QWidget;
+    duplicate->setObjectName("settings");
+    navigation.open(duplicate);
+    QCOMPARE(navigation.depth(), 1);
+    QCOMPARE(host.currentWidget(), settings);
+    for (int i = 0; i < 20; ++i) navigation.open(new QWidget);
+    QCOMPARE(navigation.depth(), 6);
+    navigation.clear();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QCOMPARE(host.count(), 2);
+    QCOMPARE(host.currentWidget(), root);
+    QVERIFY(!navigation.active());
+}
+
+void CoreTests::restoresOnlyCategoryPreferences()
+{
+    QSettings settings;
+    QHash<QString, QVariant> saved;
+    for (const auto &entry : Preferences::entries()) saved.insert(entry.key, settings.value(entry.key));
+    const QString sentinel = "session/reset-test";
+    const QVariant oldSentinel = settings.value(sentinel);
+    const auto restore = qScopeGuard([&] {
+        for (auto it = saved.cbegin(); it != saved.cend(); ++it)
+            if (it.value().isValid()) settings.setValue(it.key(), it.value()); else settings.remove(it.key());
+        if (oldSentinel.isValid()) settings.setValue(sentinel, oldSentinel); else settings.remove(sentinel);
+    });
+    settings.setValue(sentinel, "dados preservados");
+    settings.setValue("appearance/fontSize", 18);
+    settings.setValue("privacy/savePasswords", false);
+    Preferences::resetCategory("appearance");
+    QCOMPARE(Preferences::value("appearance/fontSize").toInt(), 13);
+    QVERIFY(!Preferences::value("privacy/savePasswords").toBool());
+    QCOMPARE(settings.value(sentinel).toString(), QString("dados preservados"));
+    Preferences::resetCategory("not-a-category");
+    QCOMPARE(settings.value(sentinel).toString(), QString("dados preservados"));
+}
+
+void CoreTests::migratesWorkspaceContents()
+{
+    QWidget host;
+    TabManager manager(nullptr, nullptr);
+    manager.setWorkspaceCount(3);
+    const int folder = manager.createFolder(1, "Pasta preservada");
+    const int tab = manager.createTab(QUrl("https://example.org"), 1, &host, false, folder, true);
+    const int closed = manager.createTab(QUrl("https://closed.example.org"), 1, &host, false, folder, true);
+    manager.closeTab(closed);
+    const int last = manager.createTab(QUrl("about:blank"), 2, &host, false, -1, true);
+    QVERIFY(!manager.removeWorkspace(1));
+    QVERIFY(!manager.removeWorkspace(1, 1));
+    QVERIFY(manager.removeWorkspace(1, 2));
+    QCOMPARE(manager.tab(tab)->workspace, 1);
+    QCOMPARE(manager.tab(last)->workspace, 1);
+    QCOMPARE(manager.foldersInWorkspace(1).size(), 1);
+    QCOMPARE(manager.tab(tab)->folderId, folder);
+    const int reopened = manager.reopenClosedTab(&host);
+    QCOMPARE(manager.tab(reopened)->workspace, 1);
+    QCOMPARE(manager.tab(reopened)->folderId, folder);
+    QVERIFY(manager.removeWorkspace(0));
+    QCOMPARE(manager.tab(tab)->workspace, 0);
+    QVERIFY(!manager.removeWorkspace(0, 0));
+    QVERIFY(!manager.tab(tab)->view);
+}
+
+void CoreTests::editsSelectedWorkspace()
+{
+    SettingsPage page;
+    page.setWorkspaces({"Ativo", "Selecionado", "Outro"}, 0);
+    page.resize(900, 700);
+    page.show();
+    auto *navigation = page.findChild<QListWidget *>("settingsNavigation");
+    navigation->setCurrentRow(2);
+    auto *spaces = page.findChild<QListWidget *>("workspaceList");
+    spaces->setCurrentRow(1);
+    for (auto *button : page.findChildren<QPushButton *>())
+        if (button->text() == "Renomear selecionado") button->click();
+    auto *name = page.findChild<QLineEdit *>("workspaceName");
+    QVERIFY(name && name->isVisible());
+    QCOMPARE(name->text(), QString("Selecionado"));
+    QSignalSpy renamed(&page, &SettingsPage::workspaceNameRequested);
+    name->setText("Renomeado");
+    QTest::keyClick(name, Qt::Key_Return);
+    QCOMPARE(renamed.size(), 1);
+    QCOMPARE(renamed.first().at(2).toInt(), 1);
+    QCOMPARE(renamed.first().at(1).toString(), QString("Renomeado"));
+}
+
+void CoreTests::appliesDensityPresets()
+{
+    QSettings settings;
+    QHash<QString, QVariant> saved;
+    const QStringList keys{"appearance/fontSize", "appearance/sidebarWidth", "appearance/tabHeight"};
+    for (const auto &key : keys) saved.insert(key, settings.value(key));
+    const auto restore = qScopeGuard([&] {
+        for (const auto &key : keys)
+            if (saved.value(key).isValid()) settings.setValue(key, saved.value(key)); else settings.remove(key);
+        ThemeManager::instance().apply();
+    });
+    SettingsPage page;
+    auto *preset = page.findChild<QComboBox *>("densityPreset");
+    QVERIFY(preset);
+    preset->setCurrentIndex(2);
+    QVERIFY(QMetaObject::invokeMethod(preset, "activated", Q_ARG(int, 2)));
+    QCOMPARE(settings.value(keys[0]).toInt(), 14);
+    QCOMPARE(settings.value(keys[1]).toInt(), 260);
+    QCOMPARE(settings.value(keys[2]).toInt(), 44);
+    preset->setCurrentIndex(3);
+    QVERIFY(QMetaObject::invokeMethod(preset, "activated", Q_ARG(int, 3)));
+    QCOMPARE(settings.value(keys[1]).toInt(), 260);
+    page.refreshPreferenceControls();
+    QCOMPARE(preset->currentIndex(), 2);
+}
+
+void CoreTests::fitsWorkspaceHeadingToSidebar()
+{
+    QSettings settings;
+    const auto old = settings.value("appearance/sidebarWidth");
+    const auto restore = qScopeGuard([&] {
+        if (old.isValid()) settings.setValue("appearance/sidebarWidth", old); else settings.remove("appearance/sidebarWidth");
+        ThemeManager::instance().apply();
+    });
+    settings.setValue("appearance/sidebarWidth", 180);
+    Sidebar sidebar;
+    sidebar.setWorkspaces({"Espaço com nome longo e acentuação", "Trabalho"});
+    sidebar.setWorkspace(0);
+    sidebar.resize(180, 600);
+    sidebar.show();
+    QCoreApplication::processEvents();
+    auto *heading = sidebar.findChild<QLabel *>("workspaceHeading");
+    QVERIFY(heading);
+    QVERIFY(heading->width() >= 72);
+    const int narrow = heading->width();
+    settings.setValue("appearance/sidebarWidth", 320);
+    ThemeManager::instance().apply();
+    QCoreApplication::processEvents();
+    QVERIFY(heading->width() > narrow + 100);
+    QCOMPARE(heading->text(), QString("Espaço com nome longo e acentuação"));
+}
+
+void CoreTests::reportsMissingDownload()
+{
+    QTemporaryDir dir;
+    QFile history(dir.path() + "/downloads.json");
+    QVERIFY(history.open(QIODevice::WriteOnly));
+    history.write(QJsonDocument(QJsonArray{QJsonObject{{"path", dir.path() + "/removed.txt"}, {"completed", true}}}).toJson());
+    history.close();
+    DownloadManager manager(nullptr, nullptr, history.fileName());
+    QWidget host;
+    auto *page = manager.createPage(&host);
+    host.show();
+    page->show();
+    auto *list = page->findChild<QListWidget *>("detailList");
+    QCOMPARE(list->count(), 1);
+    list->setCurrentRow(0);
+    auto *open = page->findChild<QPushButton *>("openDownload");
+    QVERIFY(open && open->isEnabled());
+    open->click();
+    bool reported = false;
+    for (auto *label : page->findChildren<QLabel *>())
+        if (label->isVisible() && label->text().contains("movido ou removido")) reported = true;
+    QVERIFY(reported);
+    QVERIFY(!QApplication::activeModalWidget());
+}
+
+void CoreTests::keepsCustomAccentReadable()
+{
+    auto &theme = ThemeManager::instance();
+    const QString mode = theme.mode(), accent = theme.accent();
+    const auto restore = qScopeGuard([&] { theme.setMode(mode); theme.setAccent(accent); });
+    const auto luminance = [](QColor value) {
+        const auto linear = [](double c) { return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); };
+        return 0.2126 * linear(value.redF()) + 0.7152 * linear(value.greenF()) + 0.0722 * linear(value.blueF());
+    };
+    const auto contrast = [&](QColor first, QColor second) {
+        const double a = luminance(first), b = luminance(second);
+        return (qMax(a, b) + 0.05) / (qMin(a, b) + 0.05);
+    };
+    for (const QString mode : {QString("dark"), QString("light")}) {
+        theme.setMode(mode);
+        for (const QString accent : {QString("#00ff00"), QString("#0000ff"), QString("#ff0000"), QString("#ffff00"), QString("#000000"), QString("#ffffff")}) {
+            theme.setAccent(accent);
+            QVERIFY(contrast(theme.color("#8b7cf6"), theme.color("#27272a")) >= 4.5);
+            QVERIFY(contrast(theme.color("#5b4fc4"), Qt::white) >= 4.5);
+        }
+    }
+}
+
+void CoreTests::preservesLibrarySelectionAcrossPages()
+{
+    QTemporaryDir dir;
+    BrowserData data(dir.path() + "/library.sqlite");
+    for (int i = 0; i < 160; ++i)
+        QVERIFY(data.bookmark(QUrl(QString("https://example.org/%1").arg(i)), QString("Título %1").arg(i, 3, 10, QChar('0'))));
+    LibraryPage page(&data, true);
+    page.resize(760, 520);
+    page.show();
+    auto *list = page.findChild<QListWidget *>("detailList");
+    auto *more = page.findChild<QPushButton *>("libraryMore");
+    QTRY_COMPARE(list->count(), 100);
+    QVERIFY(more->isEnabled());
+    more->click();
+    QTRY_COMPARE(list->count(), 160);
+    list->setCurrentRow(130);
+    list->scrollToItem(list->currentItem());
+    const auto url = list->currentItem()->data(Qt::UserRole);
+    const int scroll = list->verticalScrollBar()->value();
+    page.refresh();
+    QTRY_VERIFY(page.findChild<QAction *>("libraryForeground")->isEnabled());
+    QCOMPARE(list->count(), 160);
+    QCOMPARE(list->currentItem()->data(Qt::UserRole), url);
+    QCOMPARE(list->verticalScrollBar()->value(), scroll);
+    QVERIFY(!more->isEnabled());
+}
+
+void CoreTests::ignoresStaleLibrarySearch()
+{
+    QTemporaryDir dir;
+    BrowserData data(dir.path() + "/library.sqlite");
+    QVERIFY(data.bookmark(QUrl("https://one.example/"), "Primeiro"));
+    QVERIFY(data.bookmark(QUrl("https://two.example/"), "Segundo"));
+    LibraryPage page(&data, true);
+    page.show();
+    auto *list = page.findChild<QListWidget *>("detailList");
+    auto *search = page.findChild<QLineEdit *>("librarySearch");
+    QTRY_COMPARE(list->count(), 2);
+    list->setCurrentRow(0);
+    auto *open = page.findChild<QAction *>("libraryForeground");
+    QVERIFY(open->isEnabled());
+    search->setText("Primeiro");
+    QVERIFY(!open->isEnabled());
+    QTest::keyClick(search, Qt::Key_Return);
+    search->setText("Segundo");
+    QTest::keyClick(search, Qt::Key_Return);
+    QTRY_COMPARE(list->count(), 1);
+    QCOMPARE(list->item(0)->data(Qt::UserRole).toString(), QString("https://two.example/"));
+    search->setText("não existe");
+    QTest::keyClick(search, Qt::Key_Return);
+    QTRY_COMPARE(list->count(), 0);
+    QVERIFY(page.findChild<QLabel *>("emptyState")->isVisible());
+    QVERIFY(!open->isEnabled());
+}
+
+void CoreTests::editsAndOpensLibraryEntries()
+{
+    QTemporaryDir dir;
+    BrowserData data(dir.path() + "/library.sqlite");
+    const QUrl url("https://saved.example/");
+    QVERIFY(data.bookmark(url, "Original", "Trabalho"));
+    LibraryPage page(&data, true);
+    page.show();
+    auto *list = page.findChild<QListWidget *>("detailList");
+    QTRY_COMPARE(list->count(), 1);
+    list->setCurrentRow(0);
+    QSignalSpy opened(&page, &LibraryPage::openRequested);
+    page.findChild<QAction *>("libraryBackground")->trigger();
+    QCOMPARE(opened.size(), 1);
+    QCOMPARE(opened.first().at(0).toUrl(), url);
+    QVERIFY(!opened.first().at(1).toBool());
+    QVERIFY(page.isVisible());
+    page.findChild<QPushButton *>("libraryEdit")->click();
+    auto *title = page.findChild<QLineEdit *>("bookmarkTitle");
+    QVERIFY(title->isVisible());
+    title->setText("Editado");
+    QTest::keyClick(title, Qt::Key_Return);
+    QTRY_VERIFY(list->item(0)->text().contains("Editado"));
+    QCOMPARE(data.entries(true).first().title, QString("Editado"));
+    QCOMPARE(data.entries(true).first().folder, QString("Trabalho"));
+    page.findChild<QAction *>("libraryForeground")->trigger();
+    QCOMPARE(opened.size(), 2);
+    QVERIFY(opened.last().at(1).toBool());
+    page.findChild<QPushButton *>("libraryRemove")->click();
+    QTRY_COMPARE(list->count(), 0);
+    QVERIFY(data.entries(true).isEmpty());
+}
+
+void CoreTests::reportsLibraryReadFailure()
+{
+    QTemporaryDir dir;
+    BrowserData data(dir.path() + "/does-not-exist/library.sqlite");
+    QVERIFY(!data.ready());
+    LibraryPage page(&data, false);
+    page.show();
+    auto *retry = page.findChild<QPushButton *>("libraryRetry");
+    QTRY_VERIFY(retry->isVisible());
+    QVERIFY(page.findChild<QLabel *>("libraryStatus")->text().contains("Não foi possível"));
+    QVERIFY(!page.findChild<QAction *>("libraryForeground")->isEnabled());
+    QVERIFY(!QApplication::activeModalWidget());
+}
+
+void CoreTests::restoresInternalFocus()
+{
+    QStackedWidget host;
+    auto *root = new QWidget;
+    auto *rootLayout = new QVBoxLayout(root);
+    auto *origin = new QLineEdit;
+    rootLayout->addWidget(origin);
+    host.addWidget(root);
+    InternalPageStack navigation(&host, root);
+    host.show();
+    host.activateWindow();
+    origin->setFocus(Qt::TabFocusReason);
+    QTRY_VERIFY(origin->hasFocus());
+    navigation.open(new QWidget);
+    navigation.back();
+    QTRY_VERIFY(origin->hasFocus());
+    navigation.open(new QWidget);
+    navigation.back();
+    auto *next = new QWidget;
+    auto *layout = new QVBoxLayout(next);
+    auto *field = new QLineEdit;
+    layout->addWidget(field);
+    navigation.open(next);
+    field->setFocus(Qt::TabFocusReason);
+    QCoreApplication::processEvents();
+    QVERIFY(field->hasFocus());
+}
+
+void CoreTests::findsCollapsedPreferenceAndRestoresPosition()
+{
+    SettingsPage page;
+    page.resize(760, 520);
+    page.show();
+    page.activateWindow();
+    auto *navigation = page.findChild<QListWidget *>("settingsNavigation");
+    navigation->setCurrentRow(1);
+    QCoreApplication::processEvents();
+    auto *stack = page.findChild<QStackedWidget *>();
+    auto *scroll = qobject_cast<QScrollArea *>(stack->currentWidget());
+    QVERIFY(scroll);
+    scroll->verticalScrollBar()->setValue(200);
+    const int position = scroll->verticalScrollBar()->value();
+    auto *search = page.findChild<QLineEdit *>("settingsSearch");
+    search->setText("zoom padrão");
+    QTest::keyClick(search, Qt::Key_Return);
+    auto *zoom = page.findChild<QSpinBox *>("web/defaultZoom");
+    QTRY_VERIFY(zoom->hasFocus());
+    search->clear();
+    QTRY_COMPARE(scroll->verticalScrollBar()->value(), position);
+    QCOMPARE(navigation->currentRow(), 1);
+    search->setText("dark");
+    QCOMPARE(navigation->currentRow(), 1);
+    search->setText("busca personalizada");
+    auto *toggle = page.findChild<QToolButton *>("customSearchToggle");
+    QVERIFY(toggle->isChecked());
+    QVERIFY(page.findChild<QLineEdit *>("customSearchTemplate")->isVisible());
+    search->clear();
+    QVERIFY(!toggle->isChecked());
+    QCOMPARE(navigation->currentRow(), 1);
+}
+
+void CoreTests::checksThemeRoleContrast()
+{
+    auto &theme = ThemeManager::instance();
+    const auto mode = theme.mode(), accent = theme.accent();
+    const auto restore = qScopeGuard([&] { theme.setMode(mode); theme.setAccent(accent); });
+    const auto luminance = [](QColor value) {
+        const auto linear = [](double c) { return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); };
+        return 0.2126 * linear(value.redF()) + 0.7152 * linear(value.greenF()) + 0.0722 * linear(value.blueF());
+    };
+    const auto contrast = [&](QColor first, QColor second) {
+        const double a = luminance(first), b = luminance(second);
+        return (qMax(a, b) + 0.05) / (qMin(a, b) + 0.05);
+    };
+    using Role = ThemeManager::Role;
+    for (const QString mode : {QString("dark"), QString("light")}) {
+        theme.setMode(mode);
+        for (const QString accent : {QString("violet"), QString("blue"), QString("teal"), QString("amber"), QString("#00ff00")}) {
+            theme.setAccent(accent);
+            for (Role background : {Role::Content, Role::Sidebar, Role::Field, Role::Raised}) {
+                for (Role foreground : {Role::Text, Role::Secondary, Role::Error})
+                    QVERIFY2(contrast(theme.color(foreground), theme.color(background)) >= 4.5, qPrintable(mode + ' ' + accent));
+                QVERIFY(contrast(theme.color(Role::Focus), theme.color(background)) >= 3.0);
+            }
+            QVERIFY(!qApp->styleSheet().contains(QRegularExpression("@[A-Za-z]+@")));
+        }
+    }
+}
+
+void CoreTests::exposesAccessibleTabActions()
+{
+    TabItemWidget tab(17);
+    tab.setTitle("Pesquisa em português");
+    auto *interface = QAccessible::queryAccessibleInterface(&tab);
+    QVERIFY(interface);
+    QCOMPARE(interface->role(), QAccessible::PageTab);
+    QCOMPARE(interface->text(QAccessible::Name), QString("Pesquisa em português"));
+    QVERIFY(interface->state().selectable);
+    QVERIFY(!interface->state().selected);
+    tab.setActive(true);
+    QVERIFY(interface->state().selected);
+    auto *actions = interface->actionInterface();
+    QVERIFY(actions);
+    QSignalSpy activated(&tab, &TabItemWidget::activated);
+    QSignalSpy closed(&tab, &TabItemWidget::closeRequested);
+    actions->doAction(QAccessibleActionInterface::pressAction());
+    QTRY_COMPARE(activated.size(), 1);
+    QCOMPARE(activated.first().first().toInt(), 17);
+    QVERIFY(actions->actionNames().contains("close"));
+    actions->doAction("close");
+    QTRY_COMPARE(closed.size(), 1);
+    tab.setEnabled(false);
+    actions->doAction("close");
+    QCoreApplication::processEvents();
+    QCOMPARE(closed.size(), 1);
+}
+
+void CoreTests::benchmarksBrowserWorkflows()
+{
+    if (!graphicalTests) QSKIP("Browser benchmark requires X11");
+    QSettings settings;
+    QHash<QString, QVariant> saved;
+    for (const auto &key : {QString("preferences/discardAfterSeconds"), QString("preferences/maxLiveTabs")}) {
+        saved.insert(key, settings.value(key));
+        settings.setValue(key, 0);
+    }
+    const auto restore = qScopeGuard([&] {
+        for (auto it = saved.cbegin(); it != saved.cend(); ++it)
+            if (it.value().isValid()) settings.setValue(it.key(), it.value()); else settings.remove(it.key());
+    });
+    QTemporaryDir fixtures;
+    QList<QUrl> urls;
+    for (int i = 0; i < 5; ++i) {
+        QFile file(fixtures.path() + QString("/page-%1.html").arg(i));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(QString("<!doctype html><meta charset='utf-8'><title>Fixture %1</title><style>body{font:16px sans-serif;max-width:60em;margin:3em auto}</style><h1>Fixture %1</h1>").arg(i).toUtf8());
+        for (int row = 0; row < 150; ++row)
+            file.write(QString("<p>Parágrafo %1: leitura e renderização em português.</p>").arg(row).toUtf8());
+        file.write("<svg width='640' height='240' xmlns='http://www.w3.org/2000/svg'><rect width='640' height='240' fill='#327c69'/><circle cx='320' cy='120' r='90' fill='#eee'/></svg><input placeholder='Formulário de teste'>");
+        file.close();
+        urls.append(QUrl::fromLocalFile(file.fileName()));
+    }
+    QJsonArray rounds;
+    for (int round = 0; round < 3; ++round) {
+        MainWindow window(true);
+        window.show();
+        window.activateWindow();
+        auto *start = window.findChild<StartPage *>();
+        QVERIFY(start);
+        const auto command = [start](int value) {
+            return QMetaObject::invokeMethod(start, "commandRequested", Q_ARG(int, value));
+        };
+        QTest::qWait(200);
+        QJsonObject result{{"round", round}, {"initial", processTreeMemory()}};
+        for (int i = 0; i < urls.size(); ++i) {
+            window.openUrls({urls[i]});
+            QTRY_VERIFY_WITH_TIMEOUT([&] {
+                for (auto *view : window.findChildren<WebView *>())
+                    if (view->title() == QString("Fixture %1").arg(i)) return true;
+                return false;
+            }(), 15000);
+        }
+        QCOMPARE(window.findChildren<WebView *>().size(), 5);
+        QTest::qWait(200);
+        result.insert("five_local_pages", processTreeMemory());
+        for (int i = 0; i < 10; ++i) QVERIFY(command(Navigation::NewTab));
+        QCOMPARE(window.findChildren<WebView *>().size(), 5);
+        result.insert("ten_additional_blank_tabs", processTreeMemory());
+        for (int i = 0; i < 10; ++i) {
+            QVERIFY(command(Navigation::SelectLastTab));
+            QVERIFY(command(Navigation::CloseTab));
+        }
+        const int widgetsBefore = window.findChildren<QWidget *>().size();
+        QJsonArray latencies;
+        for (int i = 0; i < 20; ++i) {
+            QElapsedTimer timer;
+            timer.start();
+            QVERIFY(command(Navigation::Downloads));
+            QCoreApplication::processEvents();
+            auto *downloads = window.findChild<QDialog *>("downloadsPage");
+            QVERIFY(downloads);
+            QVERIFY(downloads->isVisible());
+            latencies.append(timer.nsecsElapsed() / 1e6);
+            QVERIFY(command(Navigation::CloseTab));
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            QCOMPARE(window.findChildren<WebView *>().size(), 5);
+        }
+        result.insert("route_latency_ms", latencies);
+        QJsonArray switching;
+        for (int i = 0; i < 20; ++i) {
+            QElapsedTimer timer;
+            timer.start();
+            QVERIFY(command(Navigation::NextTab));
+            QCoreApplication::processEvents();
+            switching.append(timer.nsecsElapsed() / 1e6);
+        }
+        result.insert("tab_switch_latency_ms", switching);
+        QTest::qWait(200);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        result.insert("after_tools", processTreeMemory());
+        result.insert("widgets_before", widgetsBefore);
+        result.insert("widgets_after", window.findChildren<QWidget *>().size());
+        QCOMPARE(window.findChildren<WebView *>().size(), 5);
+        QVERIFY(window.findChildren<QDialog *>().isEmpty());
+        rounds.append(result);
+        window.close();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+    const QString output = qEnvironmentVariable("ZENITH_BENCHMARK_OUTPUT");
+    if (!output.isEmpty()) {
+        QSaveFile report(output);
+        QVERIFY(report.open(QIODevice::WriteOnly));
+        report.write(QJsonDocument(QJsonObject{{"version", ZENITH_VERSION}, {"qt", qVersion()},
+            {"scope", "QtTest host with five deterministic local pages; includes test harness overhead"},
+            {"rounds", rounds}}).toJson());
+        QVERIFY(report.commit());
+    }
+}
+
+void CoreTests::inventoriesAndResetsPreferenceControls()
+{
+    QSettings settings;
+    QHash<QString, QVariant> saved;
+    for (const auto &entry : Preferences::entries()) saved.insert(entry.key, settings.value(entry.key));
+    const auto restore = qScopeGuard([&] {
+        for (auto it = saved.cbegin(); it != saved.cend(); ++it)
+            if (it.value().isValid()) settings.setValue(it.key(), it.value()); else settings.remove(it.key());
+        ThemeManager::instance().reloadPreferences();
+    });
+    settings.setValue("preferences/searchTemplate", "https://search.example/?q=%1");
+    settings.setValue("appearance/fontSize", 18);
+    QTemporaryDir dir;
+    BrowserData data(dir.path() + "/library.sqlite");
+    QVERIFY(data.bookmark(QUrl("https://preserved.example/"), "Preservado"));
+    SettingsPage page;
+    connect(&page, &SettingsPage::preferencesReset, &ThemeManager::instance(), &ThemeManager::reloadPreferences);
+    for (const auto &entry : Preferences::entries()) {
+        QList<QWidget *> controls;
+        for (auto *widget : page.findChildren<QWidget *>())
+            if (widget->property("preferenceKey").toString() == entry.key) controls.append(widget);
+        QCOMPARE(controls.size(), 1);
+        QVERIFY2(!controls.first()->toolTip().isEmpty(), qPrintable(entry.key));
+    }
+    page.findChild<QPushButton *>("reset-appearance")->click();
+    page.findChild<QPushButton *>("resetCancel-appearance")->click();
+    QCOMPARE(Preferences::value("appearance/fontSize").toInt(), 18);
+    QSignalSpy themeChanged(&ThemeManager::instance(), &ThemeManager::changed);
+    page.findChild<QPushButton *>("reset-appearance")->click();
+    page.findChild<QPushButton *>("resetConfirm-appearance")->click();
+    QCOMPARE(themeChanged.size(), 1);
+    QCOMPARE(Preferences::value("appearance/fontSize").toInt(), 13);
+    QCOMPARE(page.findChild<QSpinBox *>("appearance/fontSize")->value(), 13);
+    QCOMPARE(Preferences::value("preferences/searchTemplate").toString(), QString("https://search.example/?q=%1"));
+    QCOMPARE(data.entries(true).size(), 1);
+    QCOMPARE(data.entries(true).first().title, QString("Preservado"));
+}
+
+void CoreTests::laysOutLibrariesAtLargeText()
+{
+    auto &theme = ThemeManager::instance();
+    const QString mode = theme.mode();
+    QSettings settings;
+    const auto font = settings.value("appearance/fontSize");
+    const auto restore = qScopeGuard([&] {
+        if (font.isValid()) settings.setValue("appearance/fontSize", font); else settings.remove("appearance/fontSize");
+        theme.setMode(mode);
+    });
+    settings.setValue("appearance/fontSize", 18);
+    QTemporaryDir dir;
+    BrowserData data(dir.path() + "/library.sqlite");
+    QVERIFY(data.bookmark(QUrl("https://example.org/"), "Título de teste com acentuação", "Trabalho"));
+    for (const QString mode : {QString("dark"), QString("light")}) {
+        theme.setMode(mode);
+        LibraryPage page(&data, true);
+        page.resize(428, 520);
+        page.show();
+        QTRY_COMPARE(page.findChild<QListWidget *>("detailList")->count(), 1);
+        QCoreApplication::processEvents();
+        QCOMPARE(page.width(), 428);
+        for (auto *button : page.findChildren<QAbstractButton *>()) {
+            if (!button->isVisible()) continue;
+            QVERIFY(button->mapTo(&page, button->rect().topLeft()).x() >= 0);
+            QVERIFY2(button->mapTo(&page, button->rect().bottomRight()).x() < page.width(), qPrintable(button->text()));
+        }
+        if (qEnvironmentVariableIsSet("ZENITH_CAPTURE_UI"))
+            QVERIFY(page.grab().save(qEnvironmentVariable("ZENITH_CAPTURE_DIR", "/tmp") + "/zenith-library-" + mode + "-large-text.png"));
+    }
+}
+
+void CoreTests::confirmsFullHistoryClearWithActiveSearch()
+{
+    QTemporaryDir dir;
+    BrowserData data(dir.path() + "/history.sqlite");
+    QVERIFY(data.visit(QUrl("https://first.example/"), "Primeira visita"));
+    QVERIFY(data.visit(QUrl("https://second.example/"), "Segunda visita"));
+    LibraryPage page(&data, false);
+    page.show();
+    auto *list = page.findChild<QListWidget *>("detailList");
+    QTRY_COMPARE(list->count(), 2);
+    auto *search = page.findChild<QLineEdit *>("librarySearch");
+    search->setText("Primeira");
+    QTest::keyClick(search, Qt::Key_Return);
+    QTRY_COMPARE(list->count(), 1);
+    auto *remove = page.findChild<QPushButton *>("libraryRemove");
+    QVERIFY(remove->text().contains("todo o histórico"));
+    for (auto decision : {QMessageBox::No, QMessageBox::Yes}) {
+        QTimer::singleShot(0, &page, [decision] {
+            if (auto *prompt = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+                prompt->button(decision)->click();
+        });
+        remove->click();
+        if (decision == QMessageBox::No) QCOMPARE(data.entries(false).size(), 2);
+        else QTRY_COMPARE(list->count(), 0);
+    }
+    QVERIFY(data.entries(false).isEmpty());
+}
+
+void CoreTests::treatsExternalTooltipContentAsText()
+{
+    const QString text = "<img src='file:///tmp/private.png'> & título";
+    TabItemWidget tab(1);
+    tab.setTitle(text);
+    QTextDocument document;
+    document.setHtml(tab.toolTip());
+    QCOMPARE(document.toPlainText(), text);
+    QVERIFY(!document.toHtml().contains("<img"));
+    tab.setDiscarded(true);
+    document.setHtml(tab.toolTip());
+    QCOMPARE(document.toPlainText(), text + " (hibernada)");
+    document.setHtml(PageWidgets::plainToolTip("Arquivo\n" + text));
+    QCOMPARE(document.toPlainText(), "Arquivo\n" + text);
+    Sidebar sidebar;
+    sidebar.addTab({19, 0, -1, text, {}, false, true, 0});
+    QCoreApplication::processEvents();
+    auto *essentials = sidebar.findChild<QListWidget *>("essentialsList");
+    QCOMPARE(essentials->count(), 1);
+    document.setHtml(essentials->item(0)->toolTip());
+    QCOMPARE(document.toPlainText(), text);
+    QCOMPARE(essentials->item(0)->data(Qt::AccessibleTextRole).toString(), text);
+}
 
 void CoreTests::parsesNetworkRules()
 {
@@ -345,7 +1059,7 @@ void CoreTests::isolatesCredentialBridgeFromPage()
         </script>"></iframe>)HTML", QUrl("https://example.org/"));
     QVERIFY(loaded.wait(20000));
     QTRY_COMPARE_WITH_TIMEOUT(calls, 1, 10000);
-    QCOMPARE(view.title(), QString("Isolated"));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("Isolated"), 10000);
 }
 
 void CoreTests::exportsBookmarksAsynchronously()
@@ -422,19 +1136,20 @@ void CoreTests::keepsDownloadSelectionDuringRefresh()
     history.write(QJsonDocument(records).toJson());
     history.close();
     DownloadManager manager(nullptr, nullptr, history.fileName());
-    bool retained = false;
-    QTimer::singleShot(0, &manager, [&] {
-        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
-        if (!dialog) return;
-        if (auto *list = dialog->findChild<QListWidget *>(); list && list->count() == 3) {
-            list->setCurrentRow(1);
-            QPersistentModelIndex selected(list->currentIndex());
-            manager.changed();
-            retained = selected.isValid() && list->currentIndex() == selected;
-        }
-        dialog->reject();
-    });
-    manager.show(nullptr);
+    QWidget host;
+    auto *dialog = manager.createPage(&host);
+    QVERIFY(!dialog->isWindow());
+    auto *list = dialog->findChild<QListWidget *>();
+    QVERIFY(list && list->count() == 3);
+    list->setCurrentRow(1);
+    QPersistentModelIndex selected(list->currentIndex());
+    manager.changed();
+    const bool retained = selected.isValid() && list->currentIndex() == selected;
+    host.resize(760, 540);
+    auto *layout = new QVBoxLayout(&host);
+    layout->addWidget(dialog);
+    host.show();
+    if (qEnvironmentVariableIsSet("ZENITH_CAPTURE_UI")) host.grab().save(qEnvironmentVariable("ZENITH_CAPTURE_DIR", "/tmp") + "/zenith-downloads.png");
     QVERIFY(retained);
 }
 
@@ -683,7 +1398,7 @@ void CoreTests::reloadsDiscardedTabsRepeatedly()
             QVERIFY(loaded.wait(20000));
         QCOMPARE(loaded.last().at(0).toBool(), true);
         QCOMPARE(view->url(), url);
-        QCOMPARE(view->title(), QStringLiteral("Discard recovery"));
+        QTRY_COMPARE_WITH_TIMEOUT(view->title(), QStringLiteral("Discard recovery"), 15000);
         QVERIFY(!manager.serializedHistory(id).isEmpty());
         manager.discardTab(id);
         QVERIFY(record->isDiscarded);
@@ -697,6 +1412,24 @@ void CoreTests::reloadsDiscardedTabsRepeatedly()
     QVERIFY(manager.ensureView(lazyId));
     manager.discardTab(lazyId);
     QCOMPARE(manager.tab(lazyId)->url, url);
+}
+
+void CoreTests::destroysProfilesWithPendingCookies()
+{
+    if (!graphicalTests) QSKIP("WebKit integration requires X11");
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    auto released = std::make_shared<int>(0);
+    for (int i = 0; i < 8; ++i) {
+        WebProfile profile(dir.path() + QString("/data-%1").arg(i),
+            dir.path() + QString("/cache-%1").arg(i), nullptr, true);
+        auto *manager = webkit_web_context_get_website_data_manager(profile.context());
+        g_object_weak_ref(G_OBJECT(manager), +[](gpointer data, GObject *) {
+            std::unique_ptr<std::shared_ptr<int>> count(static_cast<std::shared_ptr<int> *>(data));
+            ++**count;
+        }, new std::shared_ptr<int>(released));
+    }
+    QTRY_COMPARE_WITH_TIMEOUT(*released, 8, 20000);
 }
 
 void CoreTests::protectsUnsavedFormsDuringSuspension()
@@ -919,7 +1652,7 @@ void CoreTests::switchesWorkspacesByKeyboard()
     sidebar.show();
     QCoreApplication::processEvents();
     if (qEnvironmentVariableIsSet("ZENITH_CAPTURE_UI"))
-        QVERIFY(sidebar.grab().save("/tmp/zenith-sidebar.png"));
+        QVERIFY(sidebar.grab().save(qEnvironmentVariable("ZENITH_CAPTURE_DIR", "/tmp") + "/zenith-sidebar.png"));
 }
 
 void CoreTests::changesAppearanceAndCapturesThemes()
@@ -996,13 +1729,13 @@ void CoreTests::changesAppearanceAndCapturesThemes()
         QCoreApplication::processEvents();
         QCOMPARE(window.palette().color(QPalette::Window), theme.color("#121214"));
         if (qEnvironmentVariableIsSet("ZENITH_CAPTURE_UI"))
-            QVERIFY(window.grab().save("/tmp/zenith-" + name + ".png"));
+            QVERIFY(window.grab().save(qEnvironmentVariable("ZENITH_CAPTURE_DIR", "/tmp") + "/zenith-" + name + ".png"));
         window.resize(760, 540);
         QCoreApplication::processEvents();
         QVERIFY(mode->width() > 80);
         QVERIFY(mode->mapTo(&window, mode->rect().bottomRight()).x() < window.width());
         if (qEnvironmentVariableIsSet("ZENITH_CAPTURE_UI"))
-            QVERIFY(window.grab().save("/tmp/zenith-" + name + "-narrow.png"));
+            QVERIFY(window.grab().save(qEnvironmentVariable("ZENITH_CAPTURE_DIR", "/tmp") + "/zenith-" + name + "-narrow.png"));
         window.resize(1280, 800);
     }
     theme.setMode(originalMode);
@@ -1040,6 +1773,26 @@ void CoreTests::organizesBrowserCommands()
     auto *search = preferences.findChild<QComboBox *>("searchEngine");
     QVERIFY(search);
     QCOMPARE(search->currentData().toString(), QString("https://search.example/?q=%1"));
+    QSignalSpy searchChanged(&preferences, &SettingsPage::searchTemplateChanged);
+    auto *customSearch = preferences.findChild<QLineEdit *>("customSearchTemplate");
+    customSearch->setText("javascript:alert('%1')");
+    preferences.findChild<QPushButton *>("saveCustomSearch")->click();
+    QCOMPARE(searchChanged.size(), 0);
+    customSearch->setText("https://custom.example/?q=%1");
+    preferences.findChild<QPushButton *>("saveCustomSearch")->click();
+    QCOMPARE(searchChanged.size(), 1);
+    QCOMPARE(search->currentData().toString(), QString("https://custom.example/?q=%1"));
+    preferences.beginWorkspaceEdit(0, {});
+    auto *workspaceEditor = preferences.findChild<QWidget *>("workspaceEditor");
+    QVERIFY(!workspaceEditor->isHidden());
+    auto *workspaceName = workspaceEditor->findChild<QLineEdit *>("workspaceName");
+    auto *saveWorkspace = workspaceEditor->findChild<QPushButton *>();
+    QVERIFY(!saveWorkspace->isEnabled());
+    QSignalSpy workspaceRequested(&preferences, &SettingsPage::workspaceNameRequested);
+    workspaceName->setText("Trabalho");
+    saveWorkspace->click();
+    QCOMPARE(workspaceRequested.size(), 1);
+    QCOMPARE(workspaceRequested.first().at(1).toString(), QString("Trabalho"));
     BrowserMenu::State state;
     state.hasPage = true; state.hasSite = true; state.compact = true; state.split = true; state.zoom = 125;
     BrowserMenu menu(state);
@@ -1051,6 +1804,14 @@ void CoreTests::organizesBrowserCommands()
         if (!entry->data().isValid()) continue;
         QVERIFY(!commands.contains(entry->data().toInt()));
         commands.insert(entry->data().toInt());
+        const QString shortcut = Navigation::shortcutLabel(entry->data().toInt());
+        if (!shortcut.isEmpty()) {
+            QVERIFY(entry->text().endsWith('\t' + shortcut));
+            const QKeySequence sequence(shortcut, QKeySequence::PortableText);
+            QVERIFY(!sequence.isEmpty());
+            const auto combination = sequence[0];
+            QCOMPARE(Navigation::command(combination.key(), combination.keyboardModifiers()), entry->data().toInt());
+        }
     }
     QVERIFY(action(menu, Navigation::Settings));
     QVERIFY(action(menu, Navigation::Settings)->parent() == &menu);
@@ -1065,7 +1826,7 @@ void CoreTests::organizesBrowserCommands()
         ThemeManager::instance().setMode(theme);
         menu.popup(QPoint(40, 40));
         QCoreApplication::processEvents();
-        if (qEnvironmentVariableIsSet("ZENITH_CAPTURE_UI")) QVERIFY(menu.grab().save("/tmp/zenith-menu-" + theme + ".png"));
+        if (qEnvironmentVariableIsSet("ZENITH_CAPTURE_UI")) QVERIFY(menu.grab().save(qEnvironmentVariable("ZENITH_CAPTURE_DIR", "/tmp") + "/zenith-menu-" + theme + ".png"));
         menu.hide();
     }
     menu.popup(QPoint(40, 40));
@@ -1093,7 +1854,7 @@ void CoreTests::organizesBrowserCommands()
     QTimer::singleShot(0, &sidebar, [&] {
         auto *popup = qobject_cast<QMenu *>(QApplication::activePopupWidget());
         if (!popup) return;
-        if (qEnvironmentVariableIsSet("ZENITH_CAPTURE_UI")) popup->grab().save("/tmp/zenith-workspace-menu.png");
+        if (qEnvironmentVariableIsSet("ZENITH_CAPTURE_UI")) popup->grab().save(qEnvironmentVariable("ZENITH_CAPTURE_DIR", "/tmp") + "/zenith-workspace-menu.png");
         for (QAction *entry : popup->actions())
             if (entry->text() == "Renomear este espaço") { popup->setActiveAction(entry); QTest::keyClick(popup, Qt::Key_Return); return; }
         popup->close();
@@ -1114,6 +1875,486 @@ void CoreTests::organizesBrowserCommands()
     QCoreApplication::processEvents();
     QCOMPARE(tabs->currentIndex(), 15);
     QVERIFY(tabs->rect().intersects(tabs->tabRect(15)));
+}
+
+void CoreTests::usesNativeStartPage()
+{
+    StartPage start;
+    start.setWorkspaceName("Espaço de teste");
+    auto *input = start.findChild<QLineEdit *>("startSearch");
+    auto *open = start.findChild<QPushButton *>("startOpen");
+    QVERIFY(input && open);
+    QVERIFY(!open->isEnabled());
+    QSignalSpy navigate(&start, &StartPage::navigateRequested);
+    input->setText("https://example.org/page");
+    QTest::keyClick(input, Qt::Key_Return);
+    QCOMPARE(navigate.size(), 1);
+    QCOMPARE(navigate.last().first().toUrl(), QUrl("https://example.org/page"));
+    QVERIFY(input->text().isEmpty());
+    start.setSearchTemplate("https://www.google.com/search?q=%1");
+    input->setText("texto de teste");
+    open->click();
+    QCOMPARE(navigate.size(), 2);
+    QCOMPARE(navigate.last().first().toUrl().host(), QString("www.google.com"));
+    QVERIFY(navigate.last().first().toUrl().query().contains("texto"));
+    input->setText("javascript:alert(1)");
+    QTest::keyClick(input, Qt::Key_Return);
+    QCOMPARE(navigate.size(), 2);
+    QSignalSpy commands(&start, &StartPage::commandRequested);
+    for (QPushButton *button : start.findChildren<QPushButton *>("startAction")) button->click();
+    QCOMPARE(commands.size(), 3);
+    QCOMPARE(commands.first().first().toInt(), int(Navigation::Bookmarks));
+}
+
+void CoreTests::defersNativeBlankTabs()
+{
+    if (!graphicalTests) QSKIP("WebKit integration requires X11");
+    QTemporaryDir dir;
+    WebProfile profile(dir.path() + "/data", dir.path() + "/cache");
+    QWidget host;
+    TabManager manager(&profile, nullptr);
+    QList<int> ids;
+    for (int i = 0; i < 3; ++i) {
+        const int id = manager.createTab(QUrl("about:blank"), 0, &host, false, -1, true);
+        manager.activateTab(id, false);
+        QVERIFY(!manager.tab(id)->view);
+        ids.append(id);
+    }
+    QVERIFY(manager.ensureView(ids.first()));
+    GList *windows = gtk_window_list_toplevels();
+    bool undecoratedHost = false;
+    for (GList *entry = windows; entry; entry = entry->next) {
+        auto *widget = GTK_WIDGET(entry->data);
+        if (QString::fromUtf8(gtk_widget_get_name(widget)) == "zenithWebHost")
+            undecoratedHost = !gtk_window_get_decorated(GTK_WINDOW(widget)) && gtk_container_get_border_width(GTK_CONTAINER(widget)) == 0;
+    }
+    g_list_free(windows);
+    QVERIFY(undecoratedHost);
+    QVERIFY(!manager.tab(ids.at(1))->view);
+    QVERIFY(!manager.tab(ids.at(2))->view);
+}
+
+void CoreTests::laysOutInternalScreens()
+{
+    auto &theme = ThemeManager::instance();
+    const QString original = theme.mode();
+    QSettings appearance;
+    const QVariant originalFont = appearance.value("appearance/fontSize");
+    const QVariant originalWidth = appearance.value("appearance/sidebarWidth");
+    const auto restore = qScopeGuard([&] {
+        for (const auto &entry : QList<QPair<QString, QVariant>>{{"appearance/fontSize", originalFont}, {"appearance/sidebarWidth", originalWidth}}) {
+            if (entry.second.isValid()) appearance.setValue(entry.first, entry.second);
+            else appearance.remove(entry.first);
+        }
+        theme.setMode(original);
+    });
+    QMainWindow window(nullptr, Qt::Window | Qt::BypassWindowManagerHint);
+    window.setObjectName("browserWindow");
+    window.setContentsMargins(6, 6, 6, 6);
+    auto *central = new QWidget;
+    window.setCentralWidget(central);
+    auto *layout = new QHBoxLayout(central);
+    layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(0);
+    auto *sidebar = new Sidebar(central);
+    sidebar->setWorkspaces({"Espaço de teste", "Trabalho (teste)"});
+    auto *right = new QWidget(central);
+    auto *vertical = new QVBoxLayout(right);
+    vertical->setContentsMargins(0, 0, 0, 0); vertical->setSpacing(0);
+    vertical->addWidget(new UrlBar(right));
+    auto *stack = new QStackedWidget(right);
+    auto *start = new StartPage(stack);
+    start->setWorkspaceName("Espaço de teste");
+    auto *settings = new SettingsPage(stack);
+    settings->setWorkspaces({"Espaço de teste", "Trabalho (teste)"}, 0);
+    settings->setAdBlockStatus(0, 0, "Listas de teste");
+    stack->addWidget(start); stack->addWidget(settings);
+    vertical->addWidget(stack, 1);
+    layout->addWidget(sidebar); layout->addWidget(right, 1);
+    auto *navigation = settings->findChild<QListWidget *>("settingsNavigation");
+    QVERIFY(navigation);
+    window.show();
+    for (const QString name : {QStringLiteral("dark"), QStringLiteral("light")}) {
+        theme.setMode(name);
+        for (const QSize size : {QSize(1280, 800), QSize(760, 520), QSize(1024, 768), QSize(1920, 1080)}) {
+            window.resize(size);
+            stack->setCurrentWidget(start);
+            QCoreApplication::processEvents();
+            QCOMPARE(window.size(), size);
+            const QString suffix = name + (size.width() < 1000 ? "-narrow" : size.width() == 1280 ? ""
+                : QString("-%1x%2").arg(size.width()).arg(size.height()));
+            if (qEnvironmentVariableIsSet("ZENITH_CAPTURE_UI")) QVERIFY(window.grab().save(qEnvironmentVariable("ZENITH_CAPTURE_DIR", "/tmp") + "/zenith-start-" + suffix + ".png"));
+            const QColor corner = window.grab().toImage().pixelColor(3, 3);
+            QCOMPARE(corner.lightness() < 128, name == "dark");
+            stack->setCurrentWidget(settings);
+            for (int page = 0; page < navigation->count(); ++page) {
+                navigation->setCurrentRow(page);
+                QCoreApplication::processEvents();
+                for (QComboBox *control : settings->findChildren<QComboBox *>()) {
+                    if (!control->isVisible()) continue;
+                    QVERIFY2(control->mapTo(&window, control->rect().bottomRight()).x() < window.width(), qPrintable(control->objectName()));
+                }
+                for (QCheckBox *control : settings->findChildren<QCheckBox *>()) {
+                    if (!control->isVisible()) continue;
+                    QVERIFY2(control->fontMetrics().horizontalAdvance(control->text()) + 28 <= control->width(), qPrintable(control->text()));
+                }
+                if (qEnvironmentVariableIsSet("ZENITH_CAPTURE_UI")) QVERIFY(window.grab().save(QString(qEnvironmentVariable("ZENITH_CAPTURE_DIR", "/tmp") + "/zenith-settings-%1-%2.png").arg(page).arg(suffix)));
+            }
+        }
+    }
+    appearance.setValue("appearance/fontSize", 18);
+    appearance.setValue("appearance/sidebarWidth", 320);
+    theme.apply();
+    window.resize(760, 540);
+    stack->setCurrentWidget(settings);
+    for (int page = 0; page < navigation->count(); ++page) {
+        navigation->setCurrentRow(page);
+        QCoreApplication::processEvents();
+        QCOMPARE(window.size(), QSize(760, 540));
+        for (QCheckBox *control : settings->findChildren<QCheckBox *>()) {
+            if (!control->isVisible()) continue;
+            QVERIFY2(control->fontMetrics().horizontalAdvance(control->text()) + 28 <= control->width(), qPrintable(control->text()));
+        }
+        if (qEnvironmentVariableIsSet("ZENITH_CAPTURE_UI")) QVERIFY(window.grab().save(QString(qEnvironmentVariable("ZENITH_CAPTURE_DIR", "/tmp") + "/zenith-settings-%1-large-text.png").arg(page)));
+    }
+    QSignalSpy selected(settings, &SettingsPage::workspaceSelected);
+    navigation->setCurrentRow(2);
+    auto *spaces = settings->findChild<QListWidget *>("workspaceList");
+    QVERIFY(spaces);
+    spaces->setCurrentRow(1);
+    QTest::keyClick(spaces, Qt::Key_Return);
+    QCOMPARE(selected.size(), 1);
+    QCOMPARE(selected.first().first().toInt(), 1);
+    theme.setMode(original);
+}
+
+void CoreTests::searchesAndRefreshesPreferences()
+{
+    QWidget host;
+    auto *page = new SettingsPage(&host);
+    host.resize(1000, 700);
+    page->setGeometry(host.rect());
+    host.show();
+    QCoreApplication::processEvents();
+    auto *navigation = page->findChild<QListWidget *>("settingsNavigation");
+    auto *category = page->findChild<QComboBox *>("settingsCategory");
+    auto *search = page->findChild<QLineEdit *>("settingsSearch");
+    QVERIFY(navigation->isVisible());
+    QVERIFY(!category->isVisible());
+    search->setText("cookies");
+    QCOMPARE(navigation->currentRow(), 3);
+    QVERIFY(!navigation->item(3)->isHidden());
+    QVERIFY(navigation->item(0)->isHidden());
+    search->setText("memoria");
+    QCOMPARE(navigation->currentRow(), 4);
+    search->setText("nenhuma-preferencia-com-esse-nome");
+    QCOMPARE(page->findChild<QStackedWidget *>()->currentIndex(), navigation->count());
+    search->clear();
+    QCOMPARE(page->findChild<QStackedWidget *>()->currentIndex(), navigation->currentRow());
+    for (int i = 0; i < navigation->count(); ++i) QVERIFY(!navigation->item(i)->isHidden());
+    host.resize(520, 600);
+    page->setGeometry(host.rect());
+    QCoreApplication::processEvents();
+    QCOMPARE(page->width(), 520);
+    QVERIFY(!navigation->isVisible());
+    QVERIFY(category->isVisible());
+    category->setCurrentIndex(1);
+    QVERIFY(QMetaObject::invokeMethod(category, "activated", Q_ARG(int, 1)));
+    QCOMPARE(navigation->currentRow(), 1);
+    QSettings settings;
+    const QVariant original = settings.value("privacy/blockThirdPartyCookies");
+    auto *cookies = page->findChild<QCheckBox *>("thirdPartyCookies");
+    QSignalSpy changed(page, &SettingsPage::privacyPolicyChanged);
+    settings.setValue("privacy/blockThirdPartyCookies", !cookies->isChecked());
+    page->refreshPreferenceControls();
+    QCOMPARE(cookies->isChecked(), settings.value("privacy/blockThirdPartyCookies").toBool());
+    QCOMPARE(changed.size(), 0);
+    if (original.isValid()) settings.setValue("privacy/blockThirdPartyCookies", original);
+    else settings.remove("privacy/blockThirdPartyCookies");
+    const QString originalMode = ThemeManager::instance().mode();
+    ThemeManager::instance().setMode(originalMode == "dark" ? "light" : "dark");
+    QCOMPARE(page->findChild<QComboBox *>("browserTheme")->currentData().toString(), ThemeManager::instance().mode());
+    ThemeManager::instance().setMode(originalMode);
+}
+
+void CoreTests::customizesBrowserDimensions()
+{
+    QSettings settings;
+    const QStringList keys{"appearance/sidebarWidth", "appearance/tabHeight", "appearance/fontSize", "web/defaultZoom"};
+    QHash<QString, QVariant> saved;
+    for (const QString &key : keys) saved.insert(key, settings.value(key));
+    const QString originalAccent = ThemeManager::instance().accent();
+    SettingsPage page;
+    Sidebar sidebar;
+    sidebar.addTab({77, 0, -1, "Aba de teste", {}, false, false, 0});
+    sidebar.setWorkspace(0);
+    auto *width = page.findChild<QSpinBox *>("appearance/sidebarWidth");
+    auto *height = page.findChild<QSpinBox *>("appearance/tabHeight");
+    QVERIFY(width && height);
+    width->setValue(280);
+    height->setValue(44);
+    QCoreApplication::processEvents();
+    QCOMPARE(sidebar.preferredWidth(), 280);
+    QCOMPARE(sidebar.width(), 280);
+    const auto rows = sidebar.findChildren<TabItemWidget *>();
+    QVERIFY(!rows.isEmpty());
+    QCOMPARE(rows.first()->height(), 44);
+    ThemeManager::instance().setAccent("#cc5500");
+    QCOMPARE(ThemeManager::instance().accent(), QString("#cc5500"));
+    QVERIFY(themeColor("#8b7cf6").isValid());
+    ThemeManager::instance().setAccent("invalid");
+    QCOMPARE(ThemeManager::instance().accent(), QString("#cc5500"));
+    QTemporaryDir dir;
+    BrowserData data(dir.path() + "/data.sqlite");
+    settings.setValue("web/defaultZoom", 125);
+    QCOMPARE(data.zoom(QUrl("https://default.example")), 1.25);
+    QVERIFY(data.setZoom(QUrl("https://saved.example"), 1.75));
+    settings.setValue("web/defaultZoom", 150);
+    QCOMPARE(data.zoom(QUrl("https://saved.example")), 1.75);
+    QSignalSpy changed(&page, &SettingsPage::browsingPreferencesChanged);
+    page.refreshPreferenceControls();
+    QCOMPARE(page.findChild<QSpinBox *>("web/defaultZoom")->value(), 150);
+    QCOMPARE(changed.size(), 0);
+    for (const QString &key : keys) {
+        if (saved.value(key).isValid()) settings.setValue(key, saved.value(key));
+        else settings.remove(key);
+    }
+    ThemeManager::instance().setAccent(originalAccent);
+}
+
+void CoreTests::embedsFindBar()
+{
+    QWidget host;
+    auto *layout = new QVBoxLayout(&host);
+    auto *bar = new FindBar(&host);
+    layout->addStretch();
+    layout->addWidget(bar);
+    host.resize(520, 400);
+    host.show();
+    bar->open(nullptr);
+    QVERIFY(!bar->isWindow());
+    QVERIFY(bar->isVisible());
+    QVERIFY(!QApplication::activeModalWidget());
+    auto *input = bar->findChild<QLineEdit *>("findInput");
+    QVERIFY(input);
+    QTest::keyClicks(input, "teste");
+    QSignalSpy closed(bar, &FindBar::closed);
+    bar->finish();
+    QCOMPARE(closed.size(), 1);
+    QVERIFY(bar->isHidden());
+    QTest::qWait(180);
+    QCOMPARE(closed.size(), 1);
+}
+
+void CoreTests::embedsBrowserTools()
+{
+    if (!graphicalTests) QSKIP("Browser integration requires X11");
+    MainWindow window(true);
+    window.show();
+    window.activateWindow();
+    QTest::qWait(200);
+    auto *start = window.findChild<StartPage *>();
+    QVERIFY(start);
+    const auto command = [start](int value) {
+        QVERIFY(QMetaObject::invokeMethod(start, "commandRequested", Q_ARG(int, value)));
+    };
+    const QString clipboardText = QApplication::clipboard()->text();
+    const auto restoreClipboard = qScopeGuard([clipboardText] { QApplication::clipboard()->setText(clipboardText); });
+    for (int iteration = 0; iteration < 20; ++iteration) {
+        command(Navigation::NewTab);
+        QApplication::clipboard()->setText("texto colado na nova aba");
+        auto *address = window.findChild<QLineEdit *>("addressInput");
+        QVERIFY(address);
+        address->selectAll();
+        QTest::keyClick(address, Qt::Key_V, Qt::ControlModifier);
+        QCOMPARE(address->text(), QString("texto colado na nova aba"));
+        QVERIFY(window.findChildren<WebView *>().isEmpty());
+        command(Navigation::CloseTab);
+    }
+    for (int iteration = 0; iteration < 3; ++iteration) {
+        for (const auto &entry : QList<QPair<int, QString>>{{Navigation::History, "historyPage"}, {Navigation::Bookmarks, "bookmarksPage"}, {Navigation::Downloads, "downloadsPage"}}) {
+            command(entry.first);
+            auto *page = window.findChild<QDialog *>(entry.second);
+            QVERIFY(page && page->isVisible());
+            QCOMPARE(page->parentWidget(), window.findChild<QStackedWidget *>());
+            QCOMPARE(page->window(), static_cast<QWidget *>(&window));
+            QVERIFY(!QApplication::activeModalWidget());
+            page->reject();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            QVERIFY(!window.findChild<QDialog *>(entry.second));
+        }
+    }
+    command(Navigation::Settings);
+    QVERIFY(window.findChild<SettingsPage *>()->isVisible());
+    command(Navigation::Downloads);
+    auto *downloadsPage = window.findChild<QDialog *>("downloadsPage");
+    QVERIFY(downloadsPage && downloadsPage->isVisible());
+    downloadsPage->reject();
+    QVERIFY(window.findChild<SettingsPage *>()->isVisible());
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QTRY_VERIFY(!window.findChild<SettingsPage *>()->isVisible());
+    QTemporaryDir dir;
+    QFile document(dir.path() + "/find.html");
+    QVERIFY(document.open(QIODevice::WriteOnly));
+    document.write("<title>Find fixture</title><p>needle needle</p>");
+    document.close();
+    window.openUrls({QUrl::fromLocalFile(document.fileName())});
+    QTRY_VERIFY_WITH_TIMEOUT(window.findChild<WebView *>(), 10000);
+    auto *view = window.findChild<WebView *>();
+    QTRY_COMPARE_WITH_TIMEOUT(view->title(), QString("Find fixture"), 15000);
+    command(Navigation::Find);
+    auto *bar = window.findChild<FindBar *>();
+    QVERIFY(bar && bar->isVisible());
+    auto *input = bar->findChild<QLineEdit *>("findInput");
+    input->setText("needle");
+    QTRY_VERIFY_WITH_TIMEOUT(bar->findChild<QLabel *>("findStatus")->text().contains('2'), 5000);
+    command(Navigation::FindPrevious);
+    bar->finish();
+    QVERIFY(!bar->isVisible());
+    command(Navigation::FindNext);
+    command(Navigation::Downloads);
+    QVERIFY(!bar->isVisible());
+    window.close();
+}
+
+void CoreTests::preservesAutomaticDownloadNames()
+{
+    QTemporaryDir dir;
+    QFile existing(dir.path() + "/archive.tar.gz");
+    QVERIFY(existing.open(QIODevice::WriteOnly));
+    existing.write("preserve");
+    existing.close();
+    const QString path = DownloadManager::uniqueDestination(dir.path(), "../archive.tar.gz");
+    QCOMPARE(QFileInfo(path).fileName(), QString("archive (1).tar.gz"));
+    QCOMPARE(QFileInfo(path).absolutePath(), dir.path());
+    QVERIFY(existing.open(QIODevice::ReadOnly));
+    QCOMPARE(existing.readAll(), QByteArray("preserve"));
+}
+
+void CoreTests::handlesFailedClipboardTargets()
+{
+    struct Result { int calls = 0; int count = -9; bool empty = false; } result;
+    const auto received = +[](GtkClipboard *, GdkAtom *atoms, gint count, gpointer data) {
+        auto *result = static_cast<Result *>(data);
+        ++result->calls;
+        result->count = count;
+        result->empty = atoms == nullptr;
+    };
+    const auto failed = +[](GtkClipboard *clipboard, GtkClipboardTargetsReceivedFunc callback, gpointer data) {
+        callback(clipboard, nullptr, -1, data);
+    };
+    GtkClipboardGuard::requestTargets(nullptr, received, &result, failed);
+    QCOMPARE(result.calls, 1);
+    QCOMPARE(result.count, 0);
+    QVERIFY(result.empty);
+    const auto valid = +[](GtkClipboard *clipboard, GtkClipboardTargetsReceivedFunc callback, gpointer data) {
+        GdkAtom targets[]{GDK_SELECTION_PRIMARY, GDK_SELECTION_CLIPBOARD};
+        callback(clipboard, targets, 2, data);
+    };
+    GtkClipboardGuard::requestTargets(nullptr, received, &result, valid);
+    QCOMPARE(result.calls, 2);
+    QCOMPARE(result.count, 2);
+    QVERIFY(!result.empty);
+    const auto invalid = +[](GtkClipboard *clipboard, GtkClipboardTargetsReceivedFunc callback, gpointer data) {
+        GdkAtom targets[]{GDK_SELECTION_PRIMARY};
+        callback(clipboard, targets, -1, data);
+    };
+    GtkClipboardGuard::requestTargets(nullptr, received, &result, invalid);
+    QCOMPARE(result.count, 0);
+    const auto asynchronous = +[](GtkClipboard *clipboard, GtkClipboardTargetsReceivedFunc callback, gpointer data) {
+        QTimer::singleShot(0, [clipboard, callback, data] { callback(clipboard, nullptr, -1, data); });
+    };
+    GtkClipboardGuard::requestTargets(nullptr, received, &result, asynchronous);
+    QTRY_COMPARE(result.calls, 4);
+    QCOMPARE(result.count, 0);
+    QVERIFY(result.empty);
+    QVERIFY(dlsym(RTLD_DEFAULT, "gtk_clipboard_request_targets") == reinterpret_cast<void *>(&gtk_clipboard_request_targets));
+}
+
+void CoreTests::pastesIntoNativeInputs()
+{
+    QWidget host;
+    auto *layout = new QVBoxLayout(&host);
+    auto *address = new UrlBar(&host);
+    auto *start = new StartPage(&host);
+    layout->addWidget(address);
+    layout->addWidget(start);
+    host.resize(900, 600);
+    host.show();
+    const QString original = QApplication::clipboard()->text();
+    const auto restore = qScopeGuard([original] { QApplication::clipboard()->setText(original); });
+    for (const QString &value : {QString("texto de teste"), QString("https://paste.example/path")}) {
+        QApplication::clipboard()->setText(value);
+        auto *input = start->findChild<QLineEdit *>("startSearch");
+        input->clear();
+        input->setFocus();
+        QTest::keyClick(input, Qt::Key_V, Qt::ControlModifier);
+        QCOMPARE(input->text(), value);
+        address->focusAddress();
+        address->injectKey(Qt::Key_A, Qt::ControlModifier, {});
+        address->injectKey(Qt::Key_V, Qt::ControlModifier, {});
+        QCOMPARE(address->findChild<QLineEdit *>("addressInput")->text(), value);
+    }
+}
+
+void CoreTests::opensMiddleClickInBackground()
+{
+    if (!graphicalTests) QSKIP("Middle-click integration requires X11");
+    QTemporaryDir dir;
+    WebProfile profile(dir.path() + "/data", dir.path() + "/cache");
+    QWidget host;
+    host.resize(900, 700);
+    TabManager manager(&profile, nullptr);
+    const int source = manager.createTab(QUrl("about:blank"), 0, &host);
+    auto *view = manager.ensureView(source);
+    view->resize(900, 700);
+    host.show(); view->show();
+    QSignalSpy loaded(view, &WebView::loadFinished);
+    QSignalSpy requested(&manager, &TabManager::newTabRequested);
+    QSignalSpy created(&manager, &TabManager::tabCreated);
+    bool expectedForeground = false;
+    connect(&manager, &TabManager::newTabRequested, &manager, [&manager, &host, &expectedForeground](int, const QUrl &url, bool foreground) {
+        QCOMPARE(foreground, expectedForeground);
+        manager.createTab(url, 0, &host, false, -1, true);
+    });
+    view->loadHtml("<style>body{margin:0}a{display:block;width:500px;height:200px}</style><a href='https://middle.example/'>Open link</a>", QUrl("https://source.example/"));
+    QTRY_VERIFY_WITH_TIMEOUT(!loaded.isEmpty(), 15000);
+    GtkWidget *native = nullptr;
+    GList *windows = gtk_window_list_toplevels();
+    for (GList *node = windows; node; node = node->next) {
+        if (!GTK_IS_PLUG(node->data)) continue;
+        GtkWidget *child = gtk_bin_get_child(GTK_BIN(node->data));
+        if (WEBKIT_IS_WEB_VIEW(child) && QString::fromUtf8(webkit_web_view_get_uri(WEBKIT_WEB_VIEW(child))) == "https://source.example/") native = child;
+    }
+    g_list_free(windows);
+    QVERIFY(native);
+    GdkWindow *window = gtk_widget_get_window(native);
+    QVERIFY(window);
+    int expectedRequests = 0;
+    for (int iteration = 0; iteration < 20; ++iteration) {
+        for (int gesture = 0; gesture < 3; ++gesture) {
+            expectedForeground = gesture == 2;
+            const guint modifiers = gesture == 0 ? 0 : GDK_CONTROL_MASK | (gesture == 2 ? GDK_SHIFT_MASK : 0);
+            for (GdkEventType type : {GDK_BUTTON_PRESS, GDK_BUTTON_RELEASE}) {
+                GdkEvent *event = gdk_event_new(type);
+                event->button.window = GDK_WINDOW(g_object_ref(window));
+                event->button.time = GDK_CURRENT_TIME;
+                event->button.x = 20; event->button.y = 20;
+                event->button.button = gesture == 0 ? 2 : 1;
+                event->button.state = modifiers;
+                gdk_event_set_device(event, gdk_seat_get_pointer(gdk_display_get_default_seat(gdk_window_get_display(window))));
+                gtk_widget_event(native, event);
+                gdk_event_free(event);
+            }
+            ++expectedRequests;
+            QTRY_COMPARE_WITH_TIMEOUT(requested.size(), expectedRequests, 5000);
+            QCOMPARE(created.size(), expectedRequests);
+            QCOMPARE(view->url(), QUrl("https://source.example/"));
+            QCOMPARE(requested.last().at(1).toUrl(), QUrl("https://middle.example/"));
+            const int added = manager.allTabIds().last();
+            QVERIFY(!manager.tab(added)->view);
+            manager.closeTab(added);
+        }
+    }
 }
 
 void CoreTests::configuresWebRendering()
@@ -1146,12 +2387,12 @@ void CoreTests::configuresWebRendering()
     theme.setSiteMode("light");
     view.loadHtml(document, QUrl("https://rendering.example/"));
     QVERIFY(loaded.wait(20000));
-    QCOMPARE(view.title(), QString("light"));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("light"), 10000);
     theme.setSiteMode("dark");
     loaded.clear();
     view.loadHtml(document, QUrl("https://rendering.example/"));
     QVERIFY(loaded.wait(20000));
-    QCOMPARE(view.title(), QString("dark"));
+    QTRY_COMPARE_WITH_TIMEOUT(view.title(), QString("dark"), 10000);
     theme.setSiteMode(sites);
     theme.setTextRendering(rendering);
 }
@@ -1175,6 +2416,9 @@ void CoreTests::roundTripsBookmarks()
     QCOMPARE(added.size(), 1);
     QCOMPARE(data.entries(true, "Original").size(), 1);
     QCOMPARE(data.entries(true).size(), 2);
+    for (const auto &entry : added) QVERIFY(data.removeBookmark(QUrl(entry.url)));
+    QCOMPARE(data.entries(true).size(), 1);
+    QCOMPARE(data.entries(true).first().title, QString("Original"));
 }
 
 void CoreTests::downloadsAfterClosingView()
@@ -1289,10 +2533,15 @@ int main(int argc, char **argv)
     }
     qputenv("QT_QPA_PLATFORM", graphicalTests ? "xcb" : "offscreen");
     QApplication app(argc, argv);
+    QTranslator qtPortuguese;
+    if (qtPortuguese.load("qtbase_pt_BR", QLibraryInfo::path(QLibraryInfo::TranslationsPath))) app.installTranslator(&qtPortuguese);
+    QCoreApplication::setApplicationVersion(ZENITH_VERSION);
     QStandardPaths::setTestModeEnabled(true);
     QCoreApplication::setOrganizationName("ZenithTests");
     QCoreApplication::setApplicationName("CoreTests");
     ThemeManager::instance().apply();
+    if (qEnvironmentVariableIsSet("ZENITH_CAPTURE_UI"))
+        QDir().mkpath(qEnvironmentVariable("ZENITH_CAPTURE_DIR", "/tmp"));
     CoreTests tests;
     return QTest::qExec(&tests, argc, argv);
 }

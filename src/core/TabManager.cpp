@@ -92,7 +92,7 @@ void TabManager::closeTab(const int id)
     emit tabClosed(id);
 }
 
-void TabManager::activateTab(const int id)
+void TabManager::activateTab(const int id, bool materialize)
 {
     auto *record = tab(id);
     if (!record) {
@@ -100,7 +100,8 @@ void TabManager::activateTab(const int id)
     }
 
     record->lastAccess = QDateTime::currentDateTimeUtc();
-    ensureView(id);
+    if (materialize) ensureView(id);
+    else if (record->url == QUrl("about:blank") && record->historyState.isEmpty()) record->isDiscarded = false;
     emit tabUpdated(id);
 }
 
@@ -360,6 +361,33 @@ QList<int> TabManager::allTabIds() const
 }
 
 void TabManager::setWorkspaceCount(int count) { workspaceCount_ = std::clamp(count, 1, 16); }
+
+bool TabManager::removeWorkspace(int workspace, int destination)
+{
+    if (workspaceCount_ <= 1 || workspace < 0 || workspace >= workspaceCount_
+        || destination == workspace || destination >= workspaceCount_ || destination < -1) return false;
+    const auto pristine = [](const Tab &tab) {
+        return tab.url == QUrl("about:blank") && tab.historyState.isEmpty() && !tab.view;
+    };
+    if (destination < 0) {
+        for (const auto &record : std::as_const(tabs_))
+            if (record.workspace == workspace && !record.isEssential && !pristine(record)) return false;
+        destination = workspace == 0 ? 1 : workspace - 1;
+    }
+    const auto remap = [workspace, destination](int value) {
+        const int moved = value == workspace ? destination : value;
+        return moved - (moved > workspace ? 1 : 0);
+    };
+    for (auto &folder : folders_) folder.workspace = remap(folder.workspace);
+    for (auto &record : tabs_) record.workspace = remap(record.workspace);
+    for (auto &closed : closedTabs_) closed.workspace = remap(closed.workspace);
+    --workspaceCount_;
+    const auto ids = allTabIds();
+    for (int id : ids) emit tabUpdated(id);
+    for (int id : std::as_const(folderOrder_)) emit folderUpdated(id);
+    return true;
+}
+
 void TabManager::setTabWorkspace(int id, int workspace)
 {
     if (workspace < 0 || workspace >= workspaceCount_) return;
@@ -495,6 +523,9 @@ void TabManager::connectView(Tab &record)
     const int id = record.id;
     WebView *view = record.view;
     connect(view, &WebView::pageFocused, this, [this, id] { emit tabFocused(id); });
+    connect(view, &WebView::newTabRequested, this, [this, id](const QUrl &url, bool foreground) {
+        emit newTabRequested(id, url, foreground);
+    });
 
     connect(view, &WebView::urlChanged, this, [this, id](const QUrl &url) {
         if (!url.isValid() || url.isEmpty())

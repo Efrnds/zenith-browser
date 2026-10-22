@@ -1,5 +1,9 @@
 # Zenith: do protótipo ao uso diário
 
+Plano de execução para o acabamento e lançamento da 1.0.0:
+[PLANO-1.0.md](PLANO-1.0.md). O plano parte da RC2, registra problemas observados,
+ordena as entregas e define critérios de aceite visual, funcional e gráfico.
+
 Auditoria inicial: 21/10/2026. Base: fontes locais, com alterações prévias preservadas.
 Este documento distingue recursos encontrados, defeitos confirmados e trabalho pendente.
 Não representa certificação de segurança ou compatibilidade. Os valores de 600 MB e
@@ -15,6 +19,25 @@ GTK/Qt. Há trechos de credenciais multiplataforma, mas o executável depende de
 WebKitGTK, X11 e DBus: não considerar Windows/macOS suportados por enquanto.
 
 ## Estado da implementação 0.2.0
+
+### Candidata 1.0.0-rc.1
+
+- Ferramentas internas integradas e Ctrl+F como barra junto ao conteúdo.
+- Preferências de usuário e ferramentas reunidas nas configurações, com mais
+  personalização de dimensões, fontes, cor, conteúdo, senhas e downloads.
+- Formulários internos para favoritos, pesquisa personalizada, perfis e espaços.
+- Workflow de tags com testes, pacote, hashes e rascunho de Release preparado.
+- Integração gráfica, pacote do Ubuntu e medição da árvore de processos ainda
+  precisam de homologação antes da estável: ver [RELEASE.md](RELEASE.md).
+
+### Revisão 0.4.0
+
+- Nova aba nativa com busca e acesso às bibliotecas, sem instanciar WebView para uma aba vazia nova. O motor é criado ao navegar ou usar split; popups relacionados preservam o fluxo anterior.
+- Configurações em grupos por função, largura de leitura limitada, prévia de tema e telas estreitas com rolagem.
+- Histórico, favoritos, credenciais e downloads com linhas detalhadas e estados vazios; downloads ativos com progresso visual.
+- Moldura opaca integrada ao tema e sem recuo em maximização/tela cheia. GtkPlug sem decoração adicional, com fundo de host coerente. Preferência de tema exportada ao gerenciador X11.
+- Tradução pt_BR dos diálogos Qt quando disponível no runtime.
+- Evidências e limites em [APPEARANCE.md](APPEARANCE.md). Conferência gráfica do motor, da moldura externa e benchmark seguem pendentes.
 
 ### Revisão 0.3.1
 

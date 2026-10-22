@@ -1,4 +1,8 @@
 #include "ui/BrowserMenu.h"
+#include "ui/PageWidgets.h"
+#include <QShowEvent>
+#include <QStyle>
+#include <QLabel>
 #include "ui/SettingsPage.h"
 #include "ui/ThemeManager.h"
 #include "ui/MainWindow.h"
@@ -13,6 +17,7 @@
 #include "core/DownloadManager.h"
 #include "core/Navigation.h"
 #include "core/SessionStore.h"
+#include "core/Preferences.h"
 #include "ui/Sidebar.h"
 #include "ui/SplitView.h"
 #include "ui/UrlBar.h"
@@ -27,6 +32,9 @@
 #include <QHBoxLayout>
 #include <QEvent>
 #include <QDialog>
+#include "ui/FindBar.h"
+#include "ui/InternalPageStack.h"
+#include "ui/UiMetrics.h"
 #include <QDialogButtonBox>
 #include <QKeySequence>
 #include <QMenu>
@@ -38,7 +46,6 @@
 #include <QResizeEvent>
 #include <QSet>
 #include <QSettings>
-#include <QShortcut>
 #include <QStandardPaths>
 #include <QStackedWidget>
 #include <QUrl>
@@ -81,8 +88,19 @@ MainWindow::MainWindow(bool privateMode, QWidget *parent)
     setWindowTitle(privateMode_ ? tr("Zenith Browser · Privado") : tr("Zenith Browser"));
     setMinimumSize(760, 520);
     resize(1280, 800);
+    setObjectName("browserWindow");
+    setAttribute(Qt::WA_StyledBackground, true);
+    setAutoFillBackground(true);
+    setContentsMargins(6, 6, 6, 6);
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this, [this] { PageWidgets::syncWindowChrome(this); if (sidebar_) { updateShellGeometry(); syncPageSurfaces(); } });
 
     createInterface();
+    auto *feedback = statusBar();
+    feedback->setSizeGripEnabled(false);
+    feedback->hide();
+    connect(feedback, &QStatusBar::messageChanged, feedback, [feedback](const QString &message) {
+        feedback->setVisible(!message.isEmpty());
+    });
     configureProfile();
     adBlockUpdater_ = new AdBlockUpdater(adBlocker_, this);
     credentialManager_ = new CredentialManager(this);
@@ -92,6 +110,11 @@ MainWindow::MainWindow(bool privateMode, QWidget *parent)
     if (!savedNames.isEmpty() && savedNames.size() <= 16) workspaceNames_ = savedNames;
     sidebar_->setWorkspaces(workspaceNames_);
     tabManager_->setWorkspaceCount(workspaceNames_.size());
+    connect(tabManager_, &TabManager::newTabRequested, this, [this](int sourceId, const QUrl &url, bool foreground) {
+        const auto *source = tabManager_->tab(sourceId);
+        if (!source) return;
+        createTab(url, source->isEssential ? currentWorkspace_ : source->workspace, foreground);
+    });
     tabManager_->setPopupFactory([this](WebView *opener, const QUrl &) {
         const int id = createTab(QUrl(), currentWorkspace_, false, false, -1, false, opener);
         QTimer::singleShot(0, this, [this, id] {
@@ -132,7 +155,6 @@ MainWindow::MainWindow(bool privateMode, QWidget *parent)
             tabManager_->suspendAll();
     });
     connectInterface();
-    createShortcuts();
     restoreSession();
     auto *idleTimer = new QTimer(this);
     idleTimer->setInterval(15'000);
@@ -169,6 +191,14 @@ void MainWindow::closeEvent(QCloseEvent *event)
 void MainWindow::changeEvent(QEvent *event)
 {
     QMainWindow::changeEvent(event);
+    if (event->type() == QEvent::WindowStateChange) {
+        const bool expanded = isMaximized() || isFullScreen();
+        const int inset = expanded ? 0 : 6;
+        setContentsMargins(inset, inset, inset, inset);
+        setProperty("expanded", expanded);
+        style()->unpolish(this); style()->polish(this);
+        QTimer::singleShot(0, this, [this] { updateShellGeometry(); syncPageSurfaces(); });
+    }
     if (event->type() != QEvent::WindowStateChange || !tabManager_)
         return;
     if (isMinimized() && suspendOnMinimize_) {
@@ -177,6 +207,12 @@ void MainWindow::changeEvent(QEvent *event)
         minimizeTimer_->stop();
         applyViewLayout();
     }
+}
+
+void MainWindow::showEvent(QShowEvent *event)
+{
+    QMainWindow::showEvent(event);
+    PageWidgets::syncWindowChrome(this);
 }
 
 void MainWindow::resizeEvent(QResizeEvent *event)
@@ -190,6 +226,21 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     if ((event->type() == QEvent::KeyPress || event->type() == QEvent::ShortcutOverride)
         && isActiveWindow() && tabManager_ && !QApplication::activeModalWidget()) {
         const auto *key = static_cast<const QKeyEvent *>(event);
+        if (key->key() == Qt::Key_Escape && key->modifiers() == Qt::NoModifier
+            && (settingsVisible_ || findBar_->isVisible())) {
+            for (QWidget *editor = QApplication::focusWidget(); editor && editor != this; editor = editor->parentWidget()) {
+                if (!editor->property("escapeHidesEditor").toBool()) continue;
+                if (event->type() == QEvent::KeyPress) editor->hide();
+                event->accept();
+                return true;
+            }
+            if (event->type() == QEvent::KeyPress) {
+                if (findBar_->isVisible()) findBar_->finish();
+                else closeSettings();
+            }
+            event->accept();
+            return true;
+        }
         const int command = Navigation::command(key->key(), key->modifiers());
         if (command != Navigation::None) {
             if (event->type() == QEvent::KeyPress && !key->isAutoRepeat()) executeCommand(command);
@@ -233,6 +284,18 @@ void MainWindow::createInterface()
     contentStack_ = new QStackedWidget(contentWidget_);
     contentStack_->addWidget(splitView_);
     contentStack_->addWidget(settingsPage_);
+    internalNavigation_ = new InternalPageStack(contentStack_, splitView_);
+    internalNavigation_->keep(settingsPage_);
+    connect(internalNavigation_, &InternalPageStack::changed, this, [this](bool active) {
+        settingsVisible_ = active;
+        if (!tabManager_) return;
+        setPageInputEnabled(!active && !findBar_->isVisible());
+        if (!active) {
+            applyViewLayout();
+            if (auto *view = currentView()) view->setFocus(Qt::BacktabFocusReason);
+        }
+        updateChrome();
+    });
     revealStrip_ = new QWidget(centralSurface_);
     revealStrip_->setObjectName(QStringLiteral("revealStrip"));
     revealStrip_->setMouseTracking(true);
@@ -250,6 +313,12 @@ void MainWindow::createInterface()
     contentLayout->setSpacing(0);
     contentLayout->addWidget(urlBar_);
     contentLayout->addWidget(contentStack_, 1);
+    findBar_ = new FindBar(contentWidget_);
+    contentLayout->addWidget(findBar_);
+    connect(findBar_, &FindBar::closed, this, [this] {
+        setPageInputEnabled(!settingsVisible_);
+        if (!settingsVisible_) if (auto *view = currentView()) view->setFocus();
+    });
     revealStrip_->hide();
     topRevealStrip_->hide();
     sidebar_->raise();
@@ -257,6 +326,37 @@ void MainWindow::createInterface()
 
 void MainWindow::connectInterface()
 {
+    connect(profile_->downloads(), &DownloadManager::changed, this, [this] {
+        urlBar_->setDownloadActivity(profile_->downloads()->active());
+    });
+    connect(qApp, &QApplication::focusChanged, this, [this](QWidget *, QWidget *focused) {
+        if (!focused || !isAncestorOf(focused) || urlBar_->isAncestorOf(focused)) return;
+        if (!qobject_cast<QLineEdit *>(focused)) return;
+        ++addressFocusToken_;
+        WebView::setKeySink({});
+        setPageInputEnabled(false);
+    });
+    connect(settingsPage_, &SettingsPage::preferencesReset, this, [this] {
+        setSearchTemplate(Preferences::value("preferences/searchTemplate").toString());
+        restoreSessionEnabled_ = Preferences::value("preferences/restoreSession").toBool();
+        suspendOnMinimize_ = Preferences::value("preferences/suspendOnMinimize").toBool();
+        adBlocker_->setEnabled(Preferences::value("preferences/adblock").toBool());
+        profile_->setPrivacyPolicy(Preferences::value("privacy/blockThirdPartyCookies").toBool(),
+                                  Preferences::value("privacy/trackingPrevention").toBool());
+        const bool reduced = Preferences::value("preferences/reducedMotion").toBool();
+        sidebarSlide_->setDuration(reduced ? 0 : 220);
+        urlBarSlide_->setDuration(reduced ? 0 : 180);
+        setCompactMode(Preferences::value("preferences/compactMode").toBool());
+        ThemeManager::instance().reloadPreferences();
+        for (const int id : tabManager_->allTabIds())
+            if (auto *tab = tabManager_->tab(id); tab && tab->view) tab->view->applyBrowsingPreferences();
+        scheduleSessionSave();
+    });
+    connect(settingsPage_, &SettingsPage::commandRequested, this, &MainWindow::executeCommand);
+    connect(settingsPage_, &SettingsPage::browsingPreferencesChanged, this, [this] {
+        for (const int id : tabManager_->allTabIds())
+            if (auto *tab = tabManager_->tab(id); tab && tab->view) tab->view->applyBrowsingPreferences();
+    });
     connect(settingsPage_, &SettingsPage::privacyPolicyChanged, this, [this](bool thirdParty, bool tracking) { profile_->setPrivacyPolicy(thirdParty, tracking); });
     connect(settingsPage_, &SettingsPage::reducedMotionChanged, this, [this](bool reduced) {
         sidebarSlide_->setDuration(reduced ? 0 : 220);
@@ -315,9 +415,9 @@ void MainWindow::connectInterface()
     connect(sidebar_, &Sidebar::closeTabRequested, this, &MainWindow::closeTab);
     connect(sidebar_, &Sidebar::workspaceSelected, this, &MainWindow::switchWorkspace);
     connect(sidebar_, &Sidebar::createWorkspaceRequested, this, [this] { manageWorkspace(0); });
-    connect(sidebar_, &Sidebar::workspaceActionRequested, this, &MainWindow::manageWorkspace);
+    connect(sidebar_, &Sidebar::workspaceActionRequested, this, [this](int action) { manageWorkspace(action); });
     connect(sidebar_, &Sidebar::splitTabRequested, this, [this](int id) {
-        if (settingsVisible_) closeSettings();
+        if (settingsVisible_) leaveInternalPages();
         if (id == currentTabId_) { toggleSplit(!splitEnabled_); return; }
         const auto *record = tabManager_->tab(id);
         if (!record || (record->workspace != currentWorkspace_ && !record->isEssential)) return;
@@ -326,7 +426,10 @@ void MainWindow::connectInterface()
         applyViewLayout();
         scheduleSessionSave();
     });
-    connect(settingsPage_, &SettingsPage::workspaceActionRequested, this, &MainWindow::manageWorkspace);
+    connect(settingsPage_, &SettingsPage::workspaceActionRequested, this, [this](int action) { manageWorkspace(action); });
+    connect(settingsPage_, &SettingsPage::workspaceNameRequested, this, [this](int action, const QString &name, int target) { manageWorkspace(action, name, target); });
+    connect(settingsPage_, &SettingsPage::workspaceTargetActionRequested, this, [this](int action, int target) { manageWorkspace(action, {}, target); });
+    connect(settingsPage_, &SettingsPage::workspaceSelected, this, &MainWindow::switchWorkspace);
     connect(sidebar_, &Sidebar::tabEssentialRequested, tabManager_, &TabManager::setTabEssential);
     connect(sidebar_, &Sidebar::tabFolderRequested, tabManager_, &TabManager::setTabFolder);
     connect(sidebar_, &Sidebar::tabWorkspaceRequested, this, [this](int id, int workspace) {
@@ -356,6 +459,7 @@ void MainWindow::connectInterface()
         for (const int candidate : ids)
             if (const auto *tab = tabManager_->tab(candidate); candidate != id && tab && !tab->isEssential) closeTab(candidate);
     });
+    connect(sidebar_, &Sidebar::folderEditRequested, this, &MainWindow::editFolder);
     connect(sidebar_, &Sidebar::createFolderRequested, this, [this](const QString &name) {
         tabManager_->createFolder(currentWorkspace_, name);
     });
@@ -375,6 +479,11 @@ void MainWindow::connectInterface()
             hideSidebarTimer_->start();
     });
     connect(hideSidebarTimer_, &QTimer::timeout, this, [this] {
+        if (QApplication::mouseButtons() != Qt::NoButton || QApplication::activePopupWidget()
+            || (QApplication::focusWidget() && sidebar_->isAncestorOf(QApplication::focusWidget()))) {
+            hideSidebarTimer_->start();
+            return;
+        }
         setCompactSidebarShown(false);
     });
     connect(hideUrlBarTimer_, &QTimer::timeout, this, [this] {
@@ -392,24 +501,9 @@ void MainWindow::connectInterface()
     });
     connect(sessionSaveTimer_, &QTimer::timeout, this, [this] { saveSession(); });
 
-    connect(urlBar_, &UrlBar::navigateRequested, this, [this](const QUrl &url) {
-        if (settingsVisible_) closeSettings();
-        auto *record = tabManager_->tab(activeTabId());
-        if (record && !record->view)
-            tabManager_->ensureView(activeTabId());
-        if (record && record->view) {
-            record->view->setUrl(url);
-            record->view->setFocus(Qt::OtherFocusReason);
-        }
-        WebView::setKeySink({});
-        urlBar_->clearAddressFocus();
-        ++addressFocusToken_;
-        setPageInputEnabled(true);
-        if (record && record->view)
-            record->view->setFocus(Qt::OtherFocusReason);
-        if (compactMode_)
-            hideUrlBarTimer_->start();
-    });
+    connect(urlBar_, &UrlBar::navigateRequested, this, &MainWindow::navigateTo);
+    connect(splitView_, &SplitView::navigateRequested, this, &MainWindow::navigateTo);
+    connect(splitView_, &SplitView::commandRequested, this, &MainWindow::executeCommand);
     connect(urlBar_, &UrlBar::backRequested, this, [this] {
         if (settingsVisible_) { closeSettings(); return; }
         if (auto *view = currentView()) view->back();
@@ -432,7 +526,7 @@ void MainWindow::connectInterface()
         if (focused)
             return;
         ++addressFocusToken_;
-        setPageInputEnabled(true);
+        setPageInputEnabled(!settingsVisible_ && !findBar_->isVisible());
         if (compactMode_)
             hideUrlBarTimer_->start();
     });
@@ -507,25 +601,6 @@ void MainWindow::configureProfile()
                               cacheRoot + QStringLiteral("/webkit"), this, privateMode_);
     adBlocker_ = new AdBlockInterceptor(this);
     profile_->setRequestBlocker(adBlocker_);
-}
-
-void MainWindow::createShortcuts()
-{
-    auto *focusUrl = new QShortcut(QKeySequence(QStringLiteral("Ctrl+L")), this);
-    connect(focusUrl, &QShortcut::activated, this, &MainWindow::revealAddressBar);
-
-    auto *newTab = new QShortcut(QKeySequence::AddTab, this);
-    connect(newTab, &QShortcut::activated, this, [this] {
-        createTab(kNewTabUrl, currentWorkspace_, true);
-    });
-
-    auto *closeCurrent = new QShortcut(QKeySequence::Close, this);
-    connect(closeCurrent, &QShortcut::activated, this, &MainWindow::closeCurrentTab);
-
-    auto *toggleSplitShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+\\")), this);
-    connect(toggleSplitShortcut, &QShortcut::activated, this, [this] {
-        toggleSplit(!splitEnabled_);
-    });
 }
 
 void MainWindow::restoreSession()
@@ -678,7 +753,7 @@ int MainWindow::createTab(const QUrl &url, const int workspace, const bool activ
                           const bool essential, const int folderId, const bool lazy,
                           WebView *related)
 {
-    const int id = tabManager_->createTab(url, workspace, splitView_, essential, folderId, lazy || (!activate && !related),
+    const int id = tabManager_->createTab(url, workspace, splitView_, essential, folderId, lazy || (!activate && !related) || (url == kNewTabUrl && !related),
                                           related);
     if (activate) {
         if (workspace != currentWorkspace_) {
@@ -712,9 +787,9 @@ void MainWindow::activateTab(const int id)
     }
     currentTabId_ = id;
     activePanelId_ = id;
-    settingsVisible_ = false;
-    contentStack_->setCurrentWidget(splitView_);
-    tabManager_->activateTab(id);
+    findBar_->finish();
+    if (settingsVisible_) leaveInternalPages();
+    tabManager_->activateTab(id, !(record->url == kNewTabUrl && record->historyState.isEmpty() && !record->view));
     sidebar_->selectTab(id);
     applyViewLayout();
     scheduleSessionSave();
@@ -796,7 +871,8 @@ void MainWindow::closeTab(const int id)
         if (currentTabId_ < 0) {
             currentTabId_ = createTab(kNewTabUrl, currentWorkspace_, false);
         }
-        tabManager_->activateTab(currentTabId_);
+        if (const auto *record = tabManager_->tab(currentTabId_))
+        tabManager_->activateTab(currentTabId_, !(record->url == kNewTabUrl && record->historyState.isEmpty() && !record->view));
         sidebar_->selectTab(currentTabId_);
     }
 
@@ -814,7 +890,7 @@ void MainWindow::switchWorkspace(const int workspace)
     if (workspace < 0 || workspace >= workspaceNames_.size() || workspace == currentWorkspace_)
         return;
 
-    if (settingsVisible_) closeSettings();
+    if (settingsVisible_) leaveInternalPages();
     currentWorkspace_ = workspace;
     sidebar_->setWorkspace(workspace);
     splitEnabled_ = false;
@@ -830,7 +906,8 @@ void MainWindow::switchWorkspace(const int workspace)
     }
 
     currentTabId_ = nextId;
-    tabManager_->activateTab(currentTabId_);
+    if (const auto *record = tabManager_->tab(currentTabId_))
+        tabManager_->activateTab(currentTabId_, !(record->url == kNewTabUrl && record->historyState.isEmpty() && !record->view));
     sidebar_->selectTab(currentTabId_);
     applyViewLayout();
     scheduleSessionSave();
@@ -864,6 +941,12 @@ void MainWindow::applyViewLayout()
         return;
     }
     auto *primary = tabManager_->tab(currentTabId_);
+    if (primary && !splitEnabled_ && primary->url == kNewTabUrl && primary->historyState.isEmpty() && !primary->view) {
+        splitView_->showStartPage(workspaceNames_.value(currentWorkspace_), searchTemplate_);
+        tabManager_->setVisibleTabs({});
+        updateChrome();
+        return;
+    }
     WebView *primaryView = tabManager_->ensureView(currentTabId_);
     if (!primary || !primaryView) {
         splitView_->showEmptyState();
@@ -915,7 +998,8 @@ void MainWindow::updateChrome()
         urlBar_->setPageAvailable(false);
         urlBar_->setNavigationState(true, false);
         urlBar_->setLoading(false);
-        setWindowTitle(tr("Configurações · Zenith"));
+        setWindowTitle(contentStack_->currentWidget()->windowTitle()
+            + (privateMode_ ? tr(" · Zenith · Privado") : tr(" · Zenith")));
         return;
     }
     const auto *record = tabManager_->tab(activeTabId());
@@ -945,7 +1029,7 @@ void MainWindow::updateSidebarTab(const int id)
         record->workspace,
         record->folderId,
         (record->crashed ? tr("[Falhou] ") : record->muted ? tr("[Mudo] ") : record->view && record->view->isPlayingAudio() ? tr("[Áudio] ") : QString()) + record->title,
-        record->icon,
+        record->icon.isNull() && record->url == kNewTabUrl ? QIcon(":/icons/zenith.png") : record->icon,
         record->isDiscarded,
         record->isEssential,
         int(tabManager_->allTabIds().indexOf(id)),
@@ -977,13 +1061,13 @@ void MainWindow::setCompactMode(const bool enabled)
     sidebar_->setSlideOffset(0);
     if (enabled) {
         sidebarReveal_ = compactSidebarVisible_ ? sidebar_->preferredWidth() : 0;
-        urlBarReveal_ = compactUrlBarVisible_ ? 58 : 0;
+        urlBarReveal_ = compactUrlBarVisible_ ? UiMetrics::Toolbar : 0;
     } else {
         sidebarReveal_ = sidebar_->preferredWidth();
-        urlBarReveal_ = 58;
+        urlBarReveal_ = UiMetrics::Toolbar;
         urlBar_->setMinimumHeight(0);
-        urlBar_->setMaximumHeight(58);
-        urlBar_->setFixedHeight(58);
+        urlBar_->setMaximumHeight(UiMetrics::Toolbar);
+        urlBar_->setFixedHeight(UiMetrics::Toolbar);
     }
     urlBar_->setCompactEnabled(enabled);
     updateShellGeometry();
@@ -1007,13 +1091,13 @@ void MainWindow::showAddressBar(const bool focus)
     if (urlBarSlide_) {
         urlBarSlide_->stop();
         urlBarSlide_->setStartValue(urlBarReveal_);
-        urlBarSlide_->setEndValue(58);
+        urlBarSlide_->setEndValue(UiMetrics::Toolbar);
         if (urlBarSlide_->startValue() != urlBarSlide_->endValue())
             urlBarSlide_->start();
         else
-            setUrlBarReveal(58);
+            setUrlBarReveal(UiMetrics::Toolbar);
     } else {
-        setUrlBarReveal(58);
+        setUrlBarReveal(UiMetrics::Toolbar);
     }
     if (focus)
         revealAddressBar();
@@ -1093,7 +1177,7 @@ int MainWindow::urlBarReveal() const
 
 void MainWindow::setUrlBarReveal(const int value)
 {
-    urlBarReveal_ = qBound(0, value, 58);
+    urlBarReveal_ = qBound(0, value, UiMetrics::Toolbar);
     if (compactMode_)
         updateShellGeometry();
 }
@@ -1143,12 +1227,12 @@ void MainWindow::updateShellGeometry()
     }
 
     if (compactMode_) {
-        const int barHeight = qBound(0, urlBarReveal_, 58);
+        const int barHeight = qBound(0, urlBarReveal_, UiMetrics::Toolbar);
         const int shown = qBound(0, sidebarReveal_, sidebarWidth);
         const int contentX = qMax(shown, 12);
         const int contentY = barHeight > 0 ? 0 : 12;
         urlBar_->setMinimumHeight(0);
-        urlBar_->setMaximumHeight(58);
+        urlBar_->setMaximumHeight(UiMetrics::Toolbar);
         urlBar_->setFixedHeight(qMax(1, barHeight));
         urlBar_->setVisible(barHeight > 0);
         sidebar_->setMinimumWidth(0);
@@ -1172,8 +1256,8 @@ void MainWindow::updateShellGeometry()
         sidebar_->setAttribute(Qt::WA_NativeWindow, false);
         urlBar_->setAttribute(Qt::WA_NativeWindow, false);
         urlBar_->setMinimumHeight(0);
-        urlBar_->setMaximumHeight(58);
-        urlBar_->setFixedHeight(58);
+        urlBar_->setMaximumHeight(UiMetrics::Toolbar);
+        urlBar_->setFixedHeight(UiMetrics::Toolbar);
         if (auto *contentLayout = qobject_cast<QVBoxLayout *>(contentWidget_->layout());
             contentLayout && contentLayout->indexOf(urlBar_) < 0) {
             urlBar_->setParent(contentWidget_);
@@ -1228,15 +1312,22 @@ void MainWindow::showBrowserMenu(const QPoint &globalPosition)
 void MainWindow::showCredentialManager()
 {
     if (privateMode_) {
-        QMessageBox::information(this, tr("Janela privada"), tr("O cofre de credenciais não é acessado nesta janela."));
+        statusBar()->showMessage(tr("O cofre de credenciais não é acessado nesta janela privada."), 7000);
         return;
     }
-    QDialog dialog(this);
+    auto *page = new QDialog(contentStack_, Qt::Widget);
+    page->setWindowFlags(Qt::Widget);
+    QDialog &dialog = *page;
     dialog.setWindowTitle(tr("Senhas e credenciais"));
     dialog.resize(520, 340);
 
     auto *layout = new QVBoxLayout(&dialog);
+    PageWidgets::heading(layout, tr("Senhas e credenciais"),
+        tr("Cofre do perfil %1. Selecione uma credencial para removê-la.")
+            .arg(qApp->property("zenithProfile").toString().isEmpty() ? tr("padrão") : qApp->property("zenithProfile").toString()));
     auto *list = new QListWidget(&dialog);
+    list->setObjectName("detailList");
+    list->setItemDelegate(new DetailListDelegate(list));
     list->setAlternatingRowColors(true);
     for (const auto &entry : credentialManager_->entries()) {
         auto *item = new QListWidgetItem(
@@ -1244,11 +1335,10 @@ void MainWindow::showCredentialManager()
         item->setData(Qt::UserRole, entry.origin);
         item->setData(Qt::UserRole + 1, entry.username);
     }
-    if (list->count() == 0) {
-        auto *empty = new QListWidgetItem(
-            tr("Nenhuma credencial salva.\nEntre em um site HTTPS para adicionar uma."), list);
-        empty->setFlags(Qt::NoItemFlags);
-    }
+    auto *empty = PageWidgets::emptyState(&dialog, tr("Nenhuma credencial salva"), tr("Entre em um site HTTPS e aceite salvar o login para encontrá-lo aqui."));
+    empty->setVisible(list->count() == 0);
+    list->setVisible(list->count() > 0);
+    layout->addWidget(empty, 1);
     layout->addWidget(list, 1);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
@@ -1258,24 +1348,33 @@ void MainWindow::showCredentialManager()
     connect(list, &QListWidget::itemSelectionChanged, &dialog, [list, remove] {
         remove->setEnabled(list->currentItem() != nullptr);
     });
-    connect(remove, &QPushButton::clicked, &dialog, [this, list] {
+    connect(remove, &QPushButton::clicked, &dialog, [this, list, empty] {
         auto *item = list->currentItem();
         if (!item)
             return;
         QString error;
         if (credentialManager_->remove(item->data(Qt::UserRole).toString(), &error, item->data(Qt::UserRole + 1).toString())) {
             delete list->takeItem(list->row(item));
+            empty->setVisible(list->count() == 0);
+            list->setVisible(list->count() > 0);
         } else {
             QMessageBox::warning(this, tr("Credencial não removida"), error);
         }
     });
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
-    dialog.exec();
+    presentInternalPage(page);
 }
 
 void MainWindow::showSettings()
 {
+    WebView::setKeySink({});
+    ++addressFocusToken_;
+    urlBar_->clearAddressFocus();
+    findBar_->finish();
+    settingsPage_->setWindowTitle(tr("Configurações"));
+    setPageInputEnabled(false);
+    settingsPage_->refreshPreferenceControls();
     settingsPage_->setWorkspaces(workspaceNames_, currentWorkspace_);
     settingsPage_->setSearchTemplate(searchTemplate_);
     settingsPage_->setCompactMode(compactMode_);
@@ -1285,16 +1384,18 @@ void MainWindow::showSettings()
     settingsPage_->setAdBlockStatus(adBlocker_->blockedCount(),
                                     adBlocker_->ruleCount(),
                                     adBlockUpdater_->statusText());
-    settingsVisible_ = true;
-    contentStack_->setCurrentWidget(settingsPage_);
+    internalNavigation_->open(settingsPage_);
     updateChrome();
 }
 
 void MainWindow::closeSettings()
 {
-    settingsVisible_ = false;
-    contentStack_->setCurrentWidget(splitView_);
-    applyViewLayout();
+    internalNavigation_->back();
+}
+
+void MainWindow::leaveInternalPages()
+{
+    internalNavigation_->clear();
 }
 
 int MainWindow::splitCandidate(const int excludedId) const
@@ -1306,4 +1407,46 @@ int MainWindow::splitCandidate(const int excludedId) const
         }
     }
     return -1;
+}
+
+void MainWindow::navigateTo(const QUrl &url)
+{
+    if (settingsVisible_) leaveInternalPages();
+    auto *record = tabManager_->tab(activeTabId());
+    if (record) record->url = url;
+    if (record && !record->view)
+        tabManager_->ensureView(activeTabId());
+    if (record && record->view) {
+        record->loadStarted = true;
+        record->view->setUrl(url);
+        applyViewLayout();
+        record->view->setFocus(Qt::OtherFocusReason);
+    }
+    WebView::setKeySink({});
+    urlBar_->clearAddressFocus();
+    ++addressFocusToken_;
+    setPageInputEnabled(true);
+    if (record && record->view)
+        record->view->setFocus(Qt::OtherFocusReason);
+    if (compactMode_)
+        hideUrlBarTimer_->start();
+}
+
+void MainWindow::presentInternalPage(QDialog *page)
+{
+    WebView::setKeySink({});
+    ++addressFocusToken_;
+    urlBar_->clearAddressFocus();
+    findBar_->finish();
+    setPageInputEnabled(false);
+    for (auto *button : page->findChildren<QPushButton *>()) button->setAutoDefault(false);
+    if (auto *buttons = page->findChild<QDialogButtonBox *>()) {
+        if (auto *close = buttons->button(QDialogButtonBox::Close)) {
+            close->setText(tr("Voltar"));
+            close->setIcon(zenithIcon(ZenithIcon::Back));
+        }
+
+    }
+    internalNavigation_->open(page);
+    updateChrome();
 }

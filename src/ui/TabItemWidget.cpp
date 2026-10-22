@@ -1,6 +1,9 @@
 #include "ui/ThemeManager.h"
 #include "ui/TabItemWidget.h"
+#include <QSettings>
 #include "ui/ZenithIcons.h"
+#include "ui/UiMetrics.h"
+#include "ui/PageWidgets.h"
 
 #include <QCursor>
 #include <QEnterEvent>
@@ -14,21 +17,64 @@
 #include <QDropEvent>
 #include <QMimeData>
 #include <QPointer>
+#include <QAccessibleWidget>
+#include <QTimer>
 
 #include <algorithm>
+
+namespace {
+class AccessibleTab final : public QAccessibleWidget
+{
+public:
+    explicit AccessibleTab(TabItemWidget *tab) : QAccessibleWidget(tab, QAccessible::PageTab) {}
+    QAccessible::State state() const override {
+        auto result = QAccessibleWidget::state();
+        result.selectable = true;
+        result.selected = static_cast<TabItemWidget *>(widget())->isActive();
+        return result;
+    }
+    QStringList actionNames() const override {
+        return {pressAction(), setFocusAction(), QStringLiteral("close")};
+    }
+    QString localizedActionName(const QString &name) const override {
+        return name == "close" ? TabItemWidget::tr("Fechar aba") : QAccessibleWidget::localizedActionName(name);
+    }
+    void doAction(const QString &name) override {
+        auto *tab = static_cast<TabItemWidget *>(widget());
+        if (!tab->isEnabled()) return;
+        if (name == pressAction() || name == "close") {
+            QTimer::singleShot(0, tab, [tab, name] {
+                if (name == "close") emit tab->closeRequested(tab->tabId());
+                else emit tab->activated(tab->tabId());
+            });
+        } else QAccessibleWidget::doAction(name);
+    }
+    QStringList keyBindingsForAction(const QString &name) const override {
+        return name == pressAction() ? QStringList{"Enter", "Space"} : QStringList{};
+    }
+};
+}
 
 TabItemWidget::TabItemWidget(const int tabId, QWidget *parent)
     : QWidget(parent)
     , tabId_(tabId)
     , fullTitle_(tr("Nova aba"))
 {
+    static const bool accessible = [] {
+        QAccessible::installFactory([](const QString &name, QObject *object) -> QAccessibleInterface * {
+            if (name == "TabItemWidget") return new AccessibleTab(static_cast<TabItemWidget *>(object));
+            return nullptr;
+        });
+        return true;
+    }();
+    Q_UNUSED(accessible);
     setObjectName(QStringLiteral("tabItem"));
     setAttribute(Qt::WA_Hover, true);
     setMouseTracking(true);
     setCursor(Qt::PointingHandCursor);
     setFocusPolicy(Qt::StrongFocus);
     setAccessibleName(tr("Aba"));
-    setFixedHeight(36);
+    setFixedHeight(qBound(32, QSettings().value("appearance/tabHeight", 36).toInt(), 48));
     setAcceptDrops(true);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 }
@@ -40,14 +86,14 @@ int TabItemWidget::tabId() const
 
 QSize TabItemWidget::sizeHint() const
 {
-    return QSize(200, 36);
+    return QSize(200, height());
 }
 
 void TabItemWidget::setTitle(const QString &title)
 {
     fullTitle_ = title.trimmed().isEmpty() ? tr("Nova aba") : title;
     setAccessibleName(fullTitle_);
-    setToolTip(fullTitle_ + (discarded_ ? tr(" (hibernada)") : QString()));
+    setToolTip(PageWidgets::plainToolTip(fullTitle_ + (discarded_ ? tr(" (hibernada)") : QString())));
     update();
 }
 
@@ -60,7 +106,7 @@ void TabItemWidget::setIcon(const QIcon &icon)
 void TabItemWidget::setDiscarded(const bool discarded)
 {
     discarded_ = discarded;
-    setToolTip(fullTitle_ + (discarded_ ? tr(" (hibernada)") : QString()));
+    setToolTip(PageWidgets::plainToolTip(fullTitle_ + (discarded_ ? tr(" (hibernada)") : QString())));
     update();
 }
 
@@ -75,6 +121,10 @@ void TabItemWidget::setActive(const bool active)
     if (active_ == active)
         return;
     active_ = active;
+    QAccessible::State changed;
+    changed.selected = true;
+    QAccessibleStateChangeEvent event(this, changed);
+    QAccessible::updateAccessibility(&event);
     update();
 }
 
@@ -93,7 +143,7 @@ bool TabItemWidget::pointerInRow() const
 
 QRect TabItemWidget::closeRect() const
 {
-    return QRect(width() - 26, (height() - 18) / 2, 18, 18);
+    return QRect(width() - UiMetrics::CloseHit - 2, (height() - UiMetrics::CloseHit) / 2, UiMetrics::CloseHit, UiMetrics::CloseHit);
 }
 
 void TabItemWidget::syncPointer()
@@ -167,11 +217,11 @@ void TabItemWidget::paintEvent(QPaintEvent *)
         return;
 
     const QRect iconRect(leading_ + 8, (height() - 16) / 2, 16, 16);
-    const QIcon drawn = icon_.isNull() ? style()->standardIcon(QStyle::SP_FileIcon) : icon_;
+    const QIcon drawn = icon_.isNull() ? zenithIcon(ZenithIcon::Document) : icon_;
     drawn.paint(&painter, iconRect, Qt::AlignCenter);
 
-    const bool showClose = pointerInside_;
-    const int textRight = width() - (showClose || discarded_ ? 30 : 10);
+    const bool showClose = pointerInside_ || hasFocus();
+    const int textRight = closeRect().left() - 4;
     const QRect textRect(iconRect.right() + 8, 0, std::max(0, textRight - iconRect.right() - 8), height());
     painter.setPen(themeColor(QStringLiteral("#d4d4d8")));
     painter.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter,
@@ -179,7 +229,7 @@ void TabItemWidget::paintEvent(QPaintEvent *)
 
     if (showClose) {
         zenithIcon(ZenithIcon::Close, themeColor(QStringLiteral("#a1a1aa")), 12)
-            .paint(&painter, closeRect(), Qt::AlignCenter);
+            .paint(&painter, closeRect().adjusted(6, 6, -6, -6), Qt::AlignCenter);
     } else if (discarded_) {
         const QRect sleepRect(width() - 24, (height() - 14) / 2, 14, 14);
         zenithIcon(ZenithIcon::Sleep, themeColor(QStringLiteral("#8b7cf6")), 14)

@@ -10,6 +10,7 @@ class QCloseEvent;
 class QEvent;
 class QPropertyAnimation;
 class QResizeEvent;
+class QShowEvent;
 class QStackedWidget;
 class QTimer;
 class QUrl;
@@ -18,6 +19,9 @@ class WebProfile;
 class WebView;
 class SplitView;
 class SettingsPage;
+class QDialog;
+class FindBar;
+class InternalPageStack;
 class TabManager;
 class UrlBar;
 
@@ -36,13 +40,13 @@ protected:
     void closeEvent(QCloseEvent *event) override;
     void changeEvent(QEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    void showEvent(QShowEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     void createInterface();
     void connectInterface();
     void configureProfile();
-    void createShortcuts();
     void restoreSession();
     void saveSession() const;
 
@@ -70,6 +74,7 @@ private:
     [[nodiscard]] int urlBarReveal() const;
     void setUrlBarReveal(int value);
     void setSearchTemplate(const QString &searchTemplate);
+    void navigateTo(const QUrl &url);
     void scheduleSessionSave();
     void showBrowserMenu(const QPoint &globalPosition);
     void showCredentialManager();
@@ -79,6 +84,10 @@ private:
     int activeTabId() const;
     void setPageInputEnabled(bool enabled);
     void showFind();
+    void presentInternalPage(QDialog *page);
+    FindBar *findBar_ = nullptr;
+    InternalPageStack *internalNavigation_ = nullptr;
+    void leaveInternalPages();
     void showLibrary(bool bookmarks);
     void addBookmark();
     void showSiteControls();
@@ -88,7 +97,9 @@ private:
     void setDefaultBrowser();
     void importBookmarks();
     void exportBookmarks();
-    void manageWorkspace(int action);
+    void manageWorkspace(int action, const QString &name = {}, int target = -1);
+    void removeWorkspace(int target, int destination);
+    void editFolder(int id);
     void closeFollowingTabs(int id);
     void closeSettings();
     [[nodiscard]] int splitCandidate(int excludedId) const;

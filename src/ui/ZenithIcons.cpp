@@ -6,6 +6,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QHash>
 
 namespace {
 void drawIcon(QPainter &painter, ZenithIcon type, const QColor &color, int size)
@@ -56,9 +57,24 @@ void drawIcon(QPainter &painter, ZenithIcon type, const QColor &color, int size)
         painter.drawPath(path);
         break;
     }
+    case ZenithIcon::Document: {
+        QPainterPath page;
+        page.moveTo(s * .25, s * .12); page.lineTo(s * .58, s * .12);
+        page.lineTo(s * .77, s * .32); page.lineTo(s * .77, s * .88);
+        page.lineTo(s * .25, s * .88); page.closeSubpath();
+        painter.drawPath(page);
+        painter.drawLine(QPointF(s * .58, s * .12), QPointF(s * .58, s * .32));
+        painter.drawLine(QPointF(s * .58, s * .32), QPointF(s * .77, s * .32));
+        break;
+    }
     case ZenithIcon::Menu:
         for (const qreal y : {.28, .5, .72})
             painter.drawLine(QPointF(s * .22, s * y), QPointF(s * .78, s * y));
+        break;
+    case ZenithIcon::History:
+        painter.drawEllipse(QRectF(s * .18, s * .18, s * .64, s * .64));
+        painter.drawLine(QPointF(s * .5, s * .32), QPointF(s * .5, s * .5));
+        painter.drawLine(QPointF(s * .5, s * .5), QPointF(s * .64, s * .58));
         break;
     case ZenithIcon::Sidebar:
         painter.drawRoundedRect(QRectF(s * .14, s * .2, s * .72, s * .6), 2, 2);
@@ -89,12 +105,11 @@ void drawIcon(QPainter &painter, ZenithIcon type, const QColor &color, int size)
         painter.drawLine(QPointF(s * .73, s * .2), QPointF(s * .56, s * .26));
         break;
     case ZenithIcon::Settings:
-        painter.drawEllipse(QRectF(s * .24, s * .24, s * .52, s * .52));
-        painter.drawEllipse(QRectF(s * .41, s * .41, s * .18, s * .18));
-        painter.drawLine(QPointF(s * .5, s * .1), QPointF(s * .5, s * .24));
-        painter.drawLine(QPointF(s * .5, s * .76), QPointF(s * .5, s * .9));
-        painter.drawLine(QPointF(s * .1, s * .5), QPointF(s * .24, s * .5));
-        painter.drawLine(QPointF(s * .76, s * .5), QPointF(s * .9, s * .5));
+        painter.drawLine(QPointF(s * .15, s * .3), QPointF(s * .85, s * .3));
+        painter.drawLine(QPointF(s * .15, s * .7), QPointF(s * .85, s * .7));
+        painter.setBrush(qApp->palette().color(QPalette::Window));
+        painter.drawEllipse(QPointF(s * .35, s * .3), s * .12, s * .12);
+        painter.drawEllipse(QPointF(s * .65, s * .7), s * .12, s * .12);
         break;
     case ZenithIcon::Shield: {
         QPainterPath path;
@@ -109,7 +124,8 @@ void drawIcon(QPainter &painter, ZenithIcon type, const QColor &color, int size)
         break;
     }
     case ZenithIcon::Sleep:
-        painter.drawArc(QRectF(s * .18, s * .14, s * .64, s * .7), 72 * 16, 224 * 16);
+        painter.drawLine(QPointF(s * .28, s * .24), QPointF(s * .28, s * .76));
+        painter.drawLine(QPointF(s * .66, s * .24), QPointF(s * .66, s * .76));
         break;
     case ZenithIcon::Split:
         painter.drawRoundedRect(QRectF(s * .15, s * .2, s * .7, s * .6), 2, 2);

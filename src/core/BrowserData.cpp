@@ -2,6 +2,7 @@
 #include "core/Navigation.h"
 
 #include <QDateTime>
+#include <QSettings>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QUuid>
@@ -285,7 +286,7 @@ double BrowserData::zoom(const QUrl &url) const
     QSqlQuery q(db_);
     q.prepare(QStringLiteral("SELECT value FROM zoom WHERE origin=?"));
     q.addBindValue(Navigation::origin(url));
-    return q.exec() && q.next() ? std::clamp(q.value(0).toDouble(), 0.25, 5.0) : 1.0;
+    return q.exec() && q.next() ? std::clamp(q.value(0).toDouble(), 0.25, 5.0) : qBound(50, QSettings().value("web/defaultZoom", 100).toInt(), 200) / 100.0;
 }
 
 bool BrowserData::setZoom(const QUrl &url, double value)

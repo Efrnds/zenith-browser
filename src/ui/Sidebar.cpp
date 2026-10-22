@@ -1,4 +1,5 @@
 #include "ui/ThemeManager.h"
+#include <QSettings>
 #include "ui/Sidebar.h"
 #include <QTabBar>
 #include <QTimer>
@@ -6,8 +7,10 @@
 
 #include "ui/TabItemWidget.h"
 #include "ui/ZenithIcons.h"
+#include "ui/PageWidgets.h"
 
 #include <QButtonGroup>
+#include <QAbstractButton>
 #include <QApplication>
 #include <QCursor>
 #include <QEnterEvent>
@@ -38,13 +41,26 @@
 #include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QStylePainter>
 
 #include <algorithm>
 #include <utility>
 
 namespace {
-constexpr int kSidebarWidth = 236;
+int sidebarWidth() { return qBound(180, QSettings().value("appearance/sidebarWidth", 236).toInt(), 320); }
 constexpr int kTabIdRole = Qt::UserRole + 1;
+
+class SpaceLabel final : public QLabel
+{
+public:
+    using QLabel::QLabel;
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QStylePainter painter(this);
+        painter.drawItemText(rect(), Qt::AlignLeft | Qt::AlignVCenter, palette(), isEnabled(),
+            fontMetrics().elidedText(text(), Qt::ElideRight, width()), QPalette::WindowText);
+    }
+};
 
 class TabListHost final : public QWidget
 {
@@ -59,16 +75,17 @@ protected:
     }
 };
 
-class FolderHeaderWidget final : public QWidget
+class FolderHeaderWidget final : public QAbstractButton
 {
 public:
     FolderHeaderWidget(const QString &name, const bool expanded, QWidget *parent)
-        : QWidget(parent)
+        : QAbstractButton(parent)
         , name_(name)
         , expanded_(expanded)
     {
         setObjectName(QStringLiteral("folderHeader"));
-        setFixedHeight(36);
+        setFixedHeight(qBound(32, QSettings().value("appearance/tabHeight", 36).toInt(), 48));
+        setText(name);
         setFocusPolicy(Qt::StrongFocus);
         setCursor(Qt::PointingHandCursor);
         setAccessibleName(expanded ? QWidget::tr("Fechar pasta %1").arg(name)
@@ -82,14 +99,14 @@ protected:
         painter.setClipRect(rect());
         painter.fillRect(rect(), themeColor(QStringLiteral("#18181b")));
         zenithIcon(ZenithIcon::Folder, themeColor(QStringLiteral("#d4d4d8")), 16)
-            .paint(&painter, QRect(8, 10, 16, 16), Qt::AlignCenter);
+            .paint(&painter, QRect(8, (height() - 16) / 2, 16, 16), Qt::AlignCenter);
 
         painter.setPen(themeColor(QStringLiteral("#d4d4d8")));
         painter.drawText(QRect(32, 0, width() - 56, height()),
-                         Qt::AlignLeft | Qt::AlignVCenter, name_);
+                         Qt::AlignLeft | Qt::AlignVCenter, fontMetrics().elidedText(name_, Qt::ElideRight, qMax(0, width() - 56)));
 
         QPainterPath chevron;
-        const QRectF box(width() - 24, 10, 16, 16);
+        const QRectF box(width() - 24, (height() - 16) / 2, 16, 16);
         if (expanded_) {
             chevron.moveTo(box.left() + 2, box.top() + 5);
             chevron.lineTo(box.center().x(), box.bottom() - 3);
@@ -119,7 +136,7 @@ Sidebar::Sidebar(QWidget *parent)
     : QWidget(parent)
     , body_(new QWidget(this))
     , essentialsLabel_(new QLabel(tr("Fixadas"), body_))
-    , sectionLabel_(new QLabel(tr("Abas"), body_))
+    , sectionLabel_(new SpaceLabel(tr("Abas"), body_))
     , workspaceMenuButton_(new QToolButton(body_))
     , newTabButton_(new QPushButton(tr("Nova aba"), body_))
     , workspaceTabs_(new QTabBar(body_))
@@ -130,7 +147,13 @@ Sidebar::Sidebar(QWidget *parent)
     setObjectName(QStringLiteral("sidebar"));
     body_->setObjectName(QStringLiteral("sidebarBody"));
     body_->setAttribute(Qt::WA_StyledBackground, true);
-    setFixedWidth(kSidebarWidth);
+    setFixedWidth(sidebarWidth());
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this, [this] {
+        setFixedWidth(sidebarWidth());
+        body_->setGeometry(slideOffset_, 0, sidebarWidth(), height());
+        for (auto *row : tabRows_) if (row) row->setFixedHeight(qBound(32, QSettings().value("appearance/tabHeight", 36).toInt(), 48));
+        relayoutTabRows();
+    });
     setMouseTracking(true);
     setAttribute(Qt::WA_StyledBackground, true);
     setAttribute(Qt::WA_OpaquePaintEvent, true);
@@ -139,6 +162,7 @@ Sidebar::Sidebar(QWidget *parent)
     essentialsLabel_->setObjectName(QStringLiteral("sectionLabel"));
     sectionLabel_->setObjectName(QStringLiteral("workspaceHeading"));
     sectionLabel_->setMinimumWidth(0);
+    sectionLabel_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     auto *workspaceLayout = new QHBoxLayout;
     workspaceLayout->setContentsMargins(0, 6, 0, 0);
     workspaceLayout->setSpacing(4);
@@ -175,8 +199,7 @@ Sidebar::Sidebar(QWidget *parent)
 
     auto *tabsHeader = new QHBoxLayout;
     tabsHeader->setContentsMargins(4, 0, 0, 0);
-    tabsHeader->addWidget(sectionLabel_);
-    tabsHeader->addStretch();
+    tabsHeader->addWidget(sectionLabel_, 1);
     tabsHeader->addWidget(workspaceMenuButton_);
 
     tabHost_->setObjectName(QStringLiteral("tabHost"));
@@ -243,7 +266,7 @@ void Sidebar::setSlideOffset(const int offset)
     clearMask();
     if (!body_)
         return;
-    body_->setGeometry(offset, 0, kSidebarWidth, std::max(height(), 1));
+    body_->setGeometry(offset, 0, sidebarWidth(), std::max(height(), 1));
 }
 
 void Sidebar::resizeEvent(QResizeEvent *event)
@@ -251,7 +274,7 @@ void Sidebar::resizeEvent(QResizeEvent *event)
     QWidget::resizeEvent(event);
     if (!body_)
         return;
-    body_->setGeometry(slideOffset_, 0, kSidebarWidth, height());
+    body_->setGeometry(slideOffset_, 0, sidebarWidth(), height());
 }
 
 void Sidebar::addTab(const TabVisual &tab)
@@ -276,8 +299,9 @@ void Sidebar::updateTab(const TabVisual &tab)
 
     if (tab.essential) {
         if (auto *item = essentialItems_.value(tab.id, nullptr)) {
-            item->setIcon(tab.icon.isNull() ? style()->standardIcon(QStyle::SP_FileIcon) : tab.icon);
-            item->setToolTip(tab.title);
+            item->setIcon(tab.icon.isNull() ? zenithIcon(ZenithIcon::Document) : tab.icon);
+            item->setToolTip(PageWidgets::plainToolTip(tab.title));
+            item->setData(Qt::AccessibleTextRole, tab.title);
         }
     } else if (auto *widget = widgets_.value(tab.id, nullptr)) {
         widget->setTitle(tab.title);
@@ -313,8 +337,8 @@ void Sidebar::setWorkspace(const int workspace)
     currentWorkspace_ = workspace;
     const QSignalBlocker blocker(workspaceTabs_);
     workspaceTabs_->setCurrentIndex(workspace);
-    sectionLabel_->setText(fontMetrics().elidedText(workspaceNames_.value(workspace), Qt::ElideRight, 156));
-    sectionLabel_->setToolTip(workspaceNames_.value(workspace));
+    sectionLabel_->setText(workspaceNames_.value(workspace));
+    sectionLabel_->setToolTip(PageWidgets::plainToolTip(workspaceNames_.value(workspace)));
     rebuildTree();
 }
 
@@ -333,20 +357,20 @@ void Sidebar::setWorkspaces(const QStringList &names)
     while (workspaceTabs_->count()) workspaceTabs_->removeTab(0);
     for (int index = 0; index < names.size(); ++index) {
         workspaceTabs_->addTab(QString::number(index + 1));
-        workspaceTabs_->setTabToolTip(index, names.at(index));
+        workspaceTabs_->setTabToolTip(index, PageWidgets::plainToolTip(names.at(index)));
         workspaceTabs_->setTabWhatsThis(index, names.at(index));
         workspaceTabs_->setAccessibleTabName(index, names.at(index));
     }
     currentWorkspace_ = qBound(0, currentWorkspace_, qMax(0, int(names.size()) - 1));
     workspaceTabs_->setCurrentIndex(currentWorkspace_);
-    sectionLabel_->setText(fontMetrics().elidedText(names.value(currentWorkspace_), Qt::ElideRight, 156));
-    sectionLabel_->setToolTip(names.value(currentWorkspace_));
+    sectionLabel_->setText(names.value(currentWorkspace_));
+    sectionLabel_->setToolTip(PageWidgets::plainToolTip(names.value(currentWorkspace_)));
     if (auto *button = findChild<QToolButton *>("createWorkspaceButton")) button->setEnabled(names.size() < 16);
 }
 
 int Sidebar::preferredWidth() const
 {
-    return kSidebarWidth;
+    return sidebarWidth();
 }
 
 void Sidebar::showEvent(QShowEvent *event)
@@ -400,11 +424,12 @@ void Sidebar::rebuildEssentials()
     });
     for (const auto &tab : essentials) {
         auto *item = new QListWidgetItem(tab.icon.isNull()
-                                             ? style()->standardIcon(QStyle::SP_FileIcon)
+                                             ? zenithIcon(ZenithIcon::Document)
                                              : tab.icon,
                                          QString(), essentialsList_);
         item->setData(kTabIdRole, tab.id);
-        item->setToolTip(tab.title);
+        item->setToolTip(PageWidgets::plainToolTip(tab.title));
+        item->setData(Qt::AccessibleTextRole, tab.title);
         essentialItems_.insert(tab.id, item);
     }
     const int rows = std::max(1, static_cast<int>((essentialItems_.size() + 3) / 4));
@@ -507,6 +532,7 @@ void Sidebar::rebuildTree()
     for (const auto &folder : visibleFolders) {
         const bool expanded = folderExpanded_.value(folder.id, true);
         auto *header = new FolderHeaderWidget(folder.name, expanded, tabHost_);
+        connect(header, &QAbstractButton::clicked, this, [this, id = folder.id] { toggleFolder(id); });
         header->setAcceptDrops(true);
         header->setToolTip(expanded ? tr("Fechar pasta") : tr("Abrir pasta"));
         header->setProperty("folderId", folder.id);
@@ -554,12 +580,13 @@ void Sidebar::relayoutTabRows()
     layingOutTabs_ = true;
     const int width = std::max(1, tabScroll_->viewport()->width());
     int y = 0;
+    const int rowHeight = qBound(32, QSettings().value("appearance/tabHeight", 36).toInt(), 48);
     for (auto *row : tabRows_) {
         if (!row)
             continue;
         row->show();
-        row->setGeometry(0, y, width, 36);
-        y += 38;
+        row->setGeometry(0, y, width, rowHeight);
+        y += rowHeight + 2;
     }
     newTabButton_->setGeometry(0, y + 4, width, 34);
     newTabButton_->show();
@@ -642,13 +669,7 @@ void Sidebar::showFolderMenu(const int id, const QPoint &globalPosition)
     connect(menu.addAction(tr("Mover pasta para cima")), &QAction::triggered, this, [this, id] { emit folderMoveRequested(id, -1); });
     connect(menu.addAction(tr("Mover pasta para baixo")), &QAction::triggered, this, [this, id] { emit folderMoveRequested(id, 1); });
     QAction *remove = menu.addAction(tr("Excluir pasta"));
-    connect(rename, &QAction::triggered, this, [this, id, oldName = iterator->name] {
-        const QString name = QInputDialog::getText(this, tr("Renomear pasta"),
-                                                   tr("Nome da pasta:"), QLineEdit::Normal,
-                                                   oldName).trimmed();
-        if (!name.isEmpty())
-            emit renameFolderRequested(id, name);
-    });
+    connect(rename, &QAction::triggered, this, [this, id] { emit folderEditRequested(id); });
     connect(remove, &QAction::triggered, this, [this, id] {
         if (QMessageBox::question(this, tr("Excluir pasta"),
                                   tr("As abas permanecerão abertas, mas sairão da pasta."))
@@ -664,20 +685,15 @@ void Sidebar::showWorkspaceMenu(const QPoint &globalPosition)
     QMenu menu(this);
     connect(menu.addAction(tr("Nova aba")), &QAction::triggered, this, &Sidebar::newTabRequested);
     connect(menu.addAction(tr("Reabrir aba fechada\tCtrl+Shift+T")), &QAction::triggered, this, &Sidebar::reopenTabRequested);
-    connect(menu.addAction(zenithIcon(ZenithIcon::Folder), tr("Nova pasta")), &QAction::triggered, this, [this] {
-        const QString name = QInputDialog::getText(this, tr("Nova pasta"), tr("Nome da pasta:")).trimmed();
-        if (!name.isEmpty()) emit createFolderRequested(name);
-    });
+    connect(menu.addAction(zenithIcon(ZenithIcon::Folder), tr("Nova pasta")), &QAction::triggered, this, [this] { emit folderEditRequested(-1); });
     menu.addSeparator();
     connect(menu.addAction(tr("Renomear este espaço")), &QAction::triggered, this, [this] { emit workspaceActionRequested(1); });
     auto *create = menu.addAction(tr("Criar espaço"));
     create->setEnabled(workspaceNames_.size() < 16);
     connect(create, &QAction::triggered, this, &Sidebar::createWorkspaceRequested);
-    auto *remove = menu.addAction(tr("Excluir este espaço vazio"));
-    bool empty = workspaceNames_.size() > 1 && currentWorkspace_ == workspaceNames_.size() - 1;
-    for (const auto &tab : std::as_const(tabs_)) if (tab.workspace == currentWorkspace_) empty = false;
-    remove->setEnabled(empty);
-    if (!empty) remove->setToolTip(tr("Só é possível excluir o último espaço, sem abas."));
+    auto *remove = menu.addAction(tr("Excluir este espaço"));
+    remove->setEnabled(workspaceNames_.size() > 1);
+    if (!remove->isEnabled()) remove->setToolTip(tr("Mantenha ao menos um espaço."));
     connect(remove, &QAction::triggered, this, [this] { emit workspaceActionRequested(2); });
     menu.exec(globalPosition);
 }

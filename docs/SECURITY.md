@@ -2,6 +2,13 @@
 
 Esta é uma descrição de políticas e limites do host, não uma certificação do navegador ou do WebKit instalado.
 
+## Texto recebido de páginas e arquivos
+
+Tooltips de abas, favoritos e downloads escapam marcação antes de usar o
+formatador do Qt. Títulos ou nomes que contêm tags aparecem como texto, sem
+virar imagens ou formatação do navegador. A suíte confere o conteúdo literal
+e os nomes acessíveis das abas essenciais. Isso não modifica o HTML dos sites.
+
 ## Ponte de credenciais, a partir de 0.2.5
 
 O script e o canal de mensagens do cofre usam o mundo JavaScript nomeado `zenith-credentials`, com injeção somente no documento principal. O mundo padrão da página deixa de receber o canal do cofre. A API é a de [registro de mensagens em um mundo específico do WebKitGTK](https://webkitgtk.org/reference/webkit2gtk/stable/method.UserContentManager.register_script_message_handler_with_reply.html).

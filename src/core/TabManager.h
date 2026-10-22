@@ -60,7 +60,7 @@ public:
     void setPopupFactory(PopupFactory factory);
     void closeTab(int id);
     void discardTab(int id);
-    void activateTab(int id);
+    void activateTab(int id, bool materialize = true);
     void setVisibleTabs(const QSet<int> &ids);
     void suspendAll();
     void suspendInactive(int idleSeconds, int maxLive = -1);
@@ -71,6 +71,7 @@ public:
     void setTabEssential(int id, bool essential);
     void setTabFolder(int id, int folderId);
     void setWorkspaceCount(int count);
+    bool removeWorkspace(int workspace, int destination = -1);
     void setTabWorkspace(int id, int workspace);
     void moveTab(int id, int delta);
     void moveTabBefore(int source, int target);
@@ -105,6 +106,7 @@ signals:
     void tabAttentionRequested(int id);
     void tabError(int id, const QString &message);
     void tabFocused(int id);
+    void newTabRequested(int sourceId, const QUrl &url, bool foreground);
 
 private:
     void suspendCandidates(QList<int> candidates, int idleSeconds, int maxLive);

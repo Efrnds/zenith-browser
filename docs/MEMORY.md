@@ -1,5 +1,14 @@
 # Memória no Zenith 0.2.2
 
+## Atualização 0.4.0: nova aba nativa
+
+Uma aba nova `about:blank`, sem histórico e sem view, usa a página inicial Qt.
+A criação do WebView é adiada até navegar ou usar divisão de tela. Popups
+relacionados e abas com histórico mantêm a materialização necessária ao motor.
+As bibliotecas usam pintura de linhas por delegate, sem um widget por registro.
+Essa alteração não foi acompanhada de benchmark de PSS/RSS; não há novo valor
+de economia de RAM a declarar. O teste com WebKit real continua exigindo X11.
+
 O orçamento deve considerar o processo principal e seus auxiliares WebKit. O RSS somado inclui páginas compartilhadas mais de uma vez; o PSS somado distribui esse custo entre processos. Ambos devem ser registrados, com o número de processos e páginas carregadas.
 
 ## Correções

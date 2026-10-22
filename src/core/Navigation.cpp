@@ -1,7 +1,51 @@
 #include "core/Navigation.h"
 
 #include <QFileInfo>
+#include <QKeySequence>
 #include <QRegularExpression>
+
+namespace {
+struct Binding { int key; Qt::KeyboardModifiers modifiers; Navigation::Command action; };
+const Binding bindings[]{
+    {Qt::Key_T, Qt::ControlModifier, Navigation::NewTab},
+    {Qt::Key_Comma, Qt::ControlModifier, Navigation::Settings},
+    {Qt::Key_L, Qt::ControlModifier, Navigation::Address},
+    {Qt::Key_W, Qt::ControlModifier, Navigation::CloseTab},
+    {Qt::Key_Tab, Qt::ControlModifier, Navigation::NextTab},
+    {Qt::Key_F, Qt::ControlModifier, Navigation::Find},
+    {Qt::Key_R, Qt::ControlModifier, Navigation::Reload},
+    {Qt::Key_Plus, Qt::ControlModifier, Navigation::ZoomIn},
+    {Qt::Key_Minus, Qt::ControlModifier, Navigation::ZoomOut},
+    {Qt::Key_0, Qt::ControlModifier, Navigation::ZoomReset},
+    {Qt::Key_H, Qt::ControlModifier, Navigation::History},
+    {Qt::Key_J, Qt::ControlModifier, Navigation::Downloads},
+    {Qt::Key_D, Qt::ControlModifier, Navigation::Bookmark},
+    {Qt::Key_P, Qt::ControlModifier, Navigation::Print},
+    {Qt::Key_Backslash, Qt::ControlModifier, Navigation::ToggleSplit},
+    {Qt::Key_Tab, Qt::ControlModifier | Qt::ShiftModifier, Navigation::PreviousTab},
+    {Qt::Key_T, Qt::ControlModifier | Qt::ShiftModifier, Navigation::ReopenTab},
+    {Qt::Key_P, Qt::ControlModifier | Qt::ShiftModifier, Navigation::NewPrivateWindow},
+    {Qt::Key_R, Qt::ControlModifier | Qt::ShiftModifier, Navigation::HardReload},
+    {Qt::Key_B, Qt::ControlModifier | Qt::ShiftModifier, Navigation::Bookmarks},
+    {Qt::Key_G, Qt::ControlModifier | Qt::ShiftModifier, Navigation::FindPrevious},
+    {Qt::Key_Backtab, Qt::ControlModifier | Qt::ShiftModifier, Navigation::PreviousTab},
+    {Qt::Key_Plus, Qt::ControlModifier | Qt::ShiftModifier, Navigation::ZoomIn},
+    {Qt::Key_Equal, Qt::ControlModifier | Qt::ShiftModifier, Navigation::ZoomIn},
+    {Qt::Key_I, Qt::ControlModifier | Qt::ShiftModifier, Navigation::Inspector},
+    {Qt::Key_F3, Qt::NoModifier, Navigation::FindNext},
+    {Qt::Key_F5, Qt::NoModifier, Navigation::Reload},
+    {Qt::Key_F11, Qt::NoModifier, Navigation::Fullscreen},
+    {Qt::Key_F10, Qt::NoModifier, Navigation::BrowserMenu},
+    {Qt::Key_F12, Qt::NoModifier, Navigation::Inspector},
+    {Qt::Key_F3, Qt::ShiftModifier, Navigation::FindPrevious},
+    {Qt::Key_Left, Qt::AltModifier, Navigation::Back},
+    {Qt::Key_Right, Qt::AltModifier, Navigation::Forward},
+    {Qt::Key_Backtab, Qt::ControlModifier, Navigation::PreviousTab},
+    {Qt::Key_F5, Qt::ControlModifier, Navigation::HardReload},
+    {Qt::Key_G, Qt::ControlModifier, Navigation::FindNext},
+    {Qt::Key_Equal, Qt::ControlModifier, Navigation::ZoomIn},
+};
+}
 
 int Navigation::command(int key, Qt::KeyboardModifiers modifiers)
 {
@@ -9,48 +53,20 @@ int Navigation::command(int key, Qt::KeyboardModifiers modifiers)
     if (mods == Qt::ControlModifier) {
         if (key >= Qt::Key_1 && key <= Qt::Key_8) return SelectTab1 + key - Qt::Key_1;
         if (key == Qt::Key_9) return SelectLastTab;
-        switch (key) {
-        case Qt::Key_T: return NewTab;
-        case Qt::Key_Comma: return Settings;
-        case Qt::Key_L: return Address;
-        case Qt::Key_W: return CloseTab;
-        case Qt::Key_Tab: return NextTab;
-        case Qt::Key_Backtab: return PreviousTab;
-        case Qt::Key_F: return Find;
-        case Qt::Key_R: return Reload;
-        case Qt::Key_F5: return HardReload;
-        case Qt::Key_G: return FindNext;
-        case Qt::Key_Plus: case Qt::Key_Equal: return ZoomIn;
-        case Qt::Key_Minus: return ZoomOut;
-        case Qt::Key_0: return ZoomReset;
-        case Qt::Key_H: return History;
-        case Qt::Key_J: return Downloads;
-        case Qt::Key_D: return Bookmark;
-        case Qt::Key_P: return Print;
-        case Qt::Key_Backslash: return ToggleSplit;
-        }
     }
-    if (mods == (Qt::ControlModifier | Qt::ShiftModifier)) {
-        switch (key) {
-        case Qt::Key_T: return ReopenTab;
-        case Qt::Key_P: return NewPrivateWindow;
-        case Qt::Key_R: return HardReload;
-        case Qt::Key_G: return FindPrevious;
-        case Qt::Key_Tab: case Qt::Key_Backtab: return PreviousTab;
-        case Qt::Key_B: return Bookmarks;
-        case Qt::Key_Plus: case Qt::Key_Equal: return ZoomIn;
-        case Qt::Key_I: return Inspector;
-        }
-    }
-    if (mods == Qt::AltModifier && key == Qt::Key_Left) return Back;
-    if (mods == Qt::AltModifier && key == Qt::Key_Right) return Forward;
-    if (mods == Qt::NoModifier && key == Qt::Key_F5) return Reload;
-    if (mods == Qt::NoModifier && key == Qt::Key_F3) return FindNext;
-    if (mods == Qt::ShiftModifier && key == Qt::Key_F3) return FindPrevious;
-    if (mods == Qt::NoModifier && key == Qt::Key_F11) return Fullscreen;
-    if (mods == Qt::NoModifier && key == Qt::Key_F10) return BrowserMenu;
-    if (mods == Qt::NoModifier && key == Qt::Key_F12) return Inspector;
+    for (const auto &binding : bindings)
+        if (binding.key == key && binding.modifiers == mods) return binding.action;
     return None;
+}
+
+QString Navigation::shortcutLabel(int action)
+{
+    for (const auto &binding : bindings)
+        if (binding.action == action)
+            return QKeySequence(QKeyCombination(binding.modifiers, static_cast<Qt::Key>(binding.key))).toString(QKeySequence::PortableText);
+    if (action >= SelectTab1 && action <= SelectLastTab)
+        return QStringLiteral("Ctrl+%1").arg(action == SelectLastTab ? 9 : action - SelectTab1 + 1);
+    return {};
 }
 
 bool Navigation::isWebUrl(const QUrl &url)

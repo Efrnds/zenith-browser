@@ -3,4 +3,6 @@ build-release/
 CMakeUserPresets.json
 compile_commands.json
 .cache/
+__pycache__/
+*.pyc
 dist/

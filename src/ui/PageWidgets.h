@@ -5,9 +5,12 @@
 class QVBoxLayout;
 class QLabel;
 namespace PageWidgets {
+QString plainToolTip(const QString &text);
 QVBoxLayout *section(QVBoxLayout *parent, const QString &title, const QString &description = {});
+QVBoxLayout *disclosure(QVBoxLayout *parent, const QString &title, const QString &name);
 void heading(QVBoxLayout *layout, const QString &title, const QString &description);
 QLabel *emptyState(QWidget *parent, const QString &title, const QString &description);
+void syncWindowChrome(QWidget *window);
 }
 
 class DetailListDelegate final : public QStyledItemDelegate

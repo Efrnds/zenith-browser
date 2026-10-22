@@ -1,4 +1,12 @@
+#include "ui/PageWidgets.h"
+#include "ui/LibraryPage.h"
+#include "ui/InternalPageStack.h"
+#include <QStatusBar>
+#include "ui/ZenithIcons.h"
 #include "ui/UrlBar.h"
+#include "ui/FindBar.h"
+#include <QStackedWidget>
+#include <memory>
 #include <QCoreApplication>
 #include <QApplication>
 #include <QProcess>
@@ -24,6 +32,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QInputDialog>
+#include <QScrollBar>
+#include <QMenu>
 #include <QSettings>
 #include <QComboBox>
 #include <QSet>
@@ -40,6 +50,7 @@
 #include <QTimer>
 #include <QShortcut>
 #include <QVBoxLayout>
+#include <QHBoxLayout>
 
 int MainWindow::activeTabId() const
 {
@@ -104,6 +115,7 @@ void MainWindow::executeCommand(int command)
     case Navigation::NewTab: createTab(QUrl("about:blank"), currentWorkspace_, true); break;
     case Navigation::Address: revealAddressBar(); break;
     case Navigation::CloseTab:
+        if (internalNavigation_->active()) { closeSettings(); break; }
         if (activeTabId() == currentTabId_) closeCurrentTab();
         else closeTab(activeTabId());
         break;
@@ -114,9 +126,10 @@ void MainWindow::executeCommand(int command)
         if (id >= 0) activateTab(id);
         break;
     }
-    case Navigation::Find: if (view) showFind(); break;
+    case Navigation::Find: showFind(); break;
     case Navigation::FindNext: case Navigation::FindPrevious:
         if (!view) break;
+        if (findBar_->isVisible()) { findBar_->advance(command == Navigation::FindPrevious); break; }
         if (view && !view->lastFindText().isEmpty()) view->find(view->lastFindText(), command == Navigation::FindPrevious);
         else showFind();
         break;
@@ -138,7 +151,7 @@ void MainWindow::executeCommand(int command)
     case Navigation::History: showLibrary(false); break;
     case Navigation::Bookmarks: showLibrary(true); break;
     case Navigation::Bookmark: if (view) addBookmark(); break;
-    case Navigation::Downloads: profile_->downloads()->show(this); break;
+    case Navigation::Downloads: presentInternalPage(profile_->downloads()->createPage(contentStack_)); break;
     case Navigation::Fullscreen: isFullScreen() ? showNormal() : showFullScreen(); break;
     case Navigation::Print: if (view) view->print(); break;
     case Navigation::Inspector: if (view) view->inspect(); break;
@@ -148,180 +161,62 @@ void MainWindow::executeCommand(int command)
 
 void MainWindow::showFind()
 {
-    const QPointer<WebView> view = currentView();
-    if (!view) return;
-    QDialog dialog(this);
-    dialog.setWindowTitle(tr("Buscar nesta página"));
-    dialog.resize(460, 150);
-    auto *layout = new QVBoxLayout(&dialog);
-    auto *input = new QLineEdit(&dialog);
-    input->setText(view->lastFindText());
-    input->setAccessibleName(tr("Texto da busca"));
-    input->setPlaceholderText(tr("Texto da busca"));
-    auto *status = new QLabel(tr("Digite para buscar."), &dialog);
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
-    auto *next = buttons->addButton(tr("Próxima"), QDialogButtonBox::ActionRole);
-    auto *previous = buttons->addButton(tr("Anterior"), QDialogButtonBox::ActionRole);
-    const auto updateButtons = [input, next, previous] {
-        next->setEnabled(!input->text().isEmpty());
-        previous->setEnabled(!input->text().isEmpty());
-    };
-    updateButtons();
-    connect(input, &QLineEdit::textChanged, &dialog, updateButtons);
-    for (auto *button : buttons->findChildren<QPushButton *>()) button->setAutoDefault(false);
-    for (const QString &key : {QString("F3"), QString("Ctrl+G")})
-        connect(new QShortcut(QKeySequence(key), &dialog), &QShortcut::activated, next, &QPushButton::click);
-    for (const QString &key : {QString("Shift+F3"), QString("Ctrl+Shift+G")})
-        connect(new QShortcut(QKeySequence(key), &dialog), &QShortcut::activated, previous, &QPushButton::click);
-    layout->addWidget(input);
-    layout->addWidget(status);
-    layout->addWidget(buttons);
-    auto *timer = new QTimer(&dialog);
-    timer->setSingleShot(true);
-    timer->setInterval(150);
-    connect(input, &QLineEdit::textChanged, timer, qOverload<>(&QTimer::start));
-    connect(timer, &QTimer::timeout, &dialog, [view, input] { if (view) view->find(input->text()); });
-    connect(next, &QPushButton::clicked, &dialog, [view, input] { if (view) view->find(input->text()); });
-    connect(input, &QLineEdit::returnPressed, next, &QPushButton::click);
-    connect(previous, &QPushButton::clicked, &dialog, [view, input] { if (view) view->find(input->text(), true); });
-    connect(view, &WebView::findResult, &dialog, [status, input](int matches) {
-        status->setText(input->text().isEmpty() ? tr("Digite para buscar.") : matches == 0 ? tr("Nenhuma ocorrência.") : matches > 10000 ? tr("Mais de 10.000 ocorrências.") : tr("%1 ocorrências").arg(matches));
-    });
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    input->setFocus();
-    input->selectAll();
-    if (!input->text().isEmpty()) view->find(input->text());
-    dialog.exec();
-    if (view) view->finishFind();
+    if (settingsVisible_) {
+        if (auto *search = contentStack_->currentWidget()->findChild<QLineEdit *>()) {
+            search->setFocus(Qt::ShortcutFocusReason);
+            search->selectAll();
+        }
+        return;
+    }
+    if (!currentView()) return;
+    WebView::setKeySink({});
+    ++addressFocusToken_;
+    urlBar_->clearAddressFocus();
+    setPageInputEnabled(false);
+    findBar_->open(currentView());
 }
 
 void MainWindow::addBookmark()
 {
     const auto *record = tabManager_->tab(activeTabId());
     if (!record || !Navigation::isWebUrl(record->url)) {
-        QMessageBox::information(this, tr("Favoritos"), tr("Abra uma página HTTP ou HTTPS para salvar um favorito."));
+        statusBar()->showMessage(tr("Abra uma página HTTP ou HTTPS para salvar um favorito."), 7000);
         return;
     }
     const QUrl url = record->url;
-    QDialog dialog(this);
+    auto *page = new QDialog(contentStack_, Qt::Widget);
+    page->setWindowFlags(Qt::Widget);
+    QDialog &dialog = *page;
     dialog.setWindowTitle(tr("Adicionar favorito"));
-    auto *form = new QFormLayout(&dialog);
+    auto *layout = new QVBoxLayout(&dialog);
+    PageWidgets::heading(layout, tr("Adicionar favorito"), url.toDisplayString());
+    auto *form = new QFormLayout;
+    form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    layout->addLayout(form);
     auto *title = new QLineEdit(record->title, &dialog);
     auto *folder = new QLineEdit(&dialog);
     form->addRow(tr("Título"), title);
     form->addRow(tr("Pasta"), folder);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
     form->addRow(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    auto *status = new QLabel(&dialog);
+    layout->addWidget(status);
+    layout->addStretch();
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [this, page, url, title, folder, status] {
+        if (profile_->data()->bookmark(url, title->text(), folder->text())) page->accept();
+        else status->setText(tr("Não foi possível salvar o favorito."));
+    });
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    if (dialog.exec() == QDialog::Accepted && !profile_->data()->bookmark(url, title->text(), folder->text()))
-        QMessageBox::warning(this, tr("Favoritos"), tr("Não foi possível salvar o favorito."));
+    presentInternalPage(page);
 }
 
 void MainWindow::showLibrary(bool bookmarks)
 {
-    QDialog dialog(this);
-    dialog.setWindowTitle(bookmarks ? tr("Favoritos") : tr("Histórico"));
-    dialog.resize(700, 480);
-    auto *layout = new QVBoxLayout(&dialog);
-    auto *search = new QLineEdit(&dialog);
-    search->setPlaceholderText(tr("Pesquisar"));
-    search->setAccessibleName(tr("Pesquisar registros"));
-    auto *list = new QListWidget(&dialog);
-    list->setAccessibleName(dialog.windowTitle());
-    auto *status = new QLabel(&dialog);
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
-    auto *open = buttons->addButton(tr("Abrir"), QDialogButtonBox::ActionRole);
-    auto *remove = buttons->addButton(bookmarks ? tr("Remover favorito") : tr("Limpar histórico"), QDialogButtonBox::ActionRole);
-    auto *more = buttons->addButton(tr("Carregar mais"), QDialogButtonBox::ActionRole);
-    auto *edit = bookmarks ? buttons->addButton(tr("Editar"), QDialogButtonBox::ActionRole) : nullptr;
-    auto updateSelection = [list, open, remove, edit, bookmarks] {
-        open->setEnabled(list->currentItem() != nullptr);
-        if (edit) edit->setEnabled(list->currentItem() != nullptr);
-        remove->setEnabled(bookmarks ? list->currentItem() != nullptr : list->count() > 0);
-    };
-    connect(list, &QListWidget::currentRowChanged, &dialog, updateSelection);
-    int offset = 0;
-    int generation = 0;
-    auto load = [this, list, status, more, search, bookmarks, updateSelection, &offset, &generation, &dialog](bool reset) {
-        if (reset) { offset = 0; list->clear(); }
-        const int request = ++generation;
-        more->setEnabled(false);
-        status->setText(tr("Carregando registros…"));
-        profile_->data()->requestEntries(bookmarks, search->text(), offset, &dialog,
-            [list, status, more, updateSelection, request, &offset, &generation](const BrowserData::QueryResult &result) {
-                if (request != generation) return;
-                if (!result.error.isEmpty()) {
-                    status->setText(tr("Não foi possível consultar os registros."));
-                    status->setToolTip(result.error);
-                    updateSelection();
-                    return;
-                }
-                const auto &entries = result.entries;
-                for (const auto &entry : entries) {
-                    auto *item = new QListWidgetItem(entry.title + '\n' + entry.url + (entry.folder.isEmpty() ? QString() : " · " + entry.folder), list);
-                    item->setData(Qt::UserRole, entry.url);
-                    item->setData(Qt::UserRole + 1, entry.title);
-                    item->setData(Qt::UserRole + 2, entry.folder);
-                }
-                offset += entries.size();
-                more->setEnabled(entries.size() == 100);
-                status->setText(list->count() ? tr("%1 registros").arg(list->count()) : tr("Nenhum registro encontrado."));
-                updateSelection();
-            });
-    };
-    auto openSelected = [this, list, &dialog] {
-        if (list->currentItem()) {
-            const QUrl url(list->currentItem()->data(Qt::UserRole).toString());
-            createTab(url, currentWorkspace_, true);
-            dialog.accept();
-        }
-    };
-    connect(open, &QPushButton::clicked, &dialog, openSelected);
-    if (edit) connect(edit, &QPushButton::clicked, &dialog, [this, list, &load] {
-        if (!list->currentItem()) return;
-        const QString url = list->currentItem()->data(Qt::UserRole).toString();
-        BrowserData::Entry selected{url, list->currentItem()->data(Qt::UserRole + 1).toString(), list->currentItem()->data(Qt::UserRole + 2).toString(), 0};
-        QDialog editor(this);
-        editor.setWindowTitle(tr("Editar favorito"));
-        auto *form = new QFormLayout(&editor);
-        auto *title = new QLineEdit(selected.title, &editor);
-        auto *folder = new QLineEdit(selected.folder, &editor);
-        form->addRow(tr("Título"), title);
-        form->addRow(tr("Pasta"), folder);
-        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &editor);
-        form->addRow(buttons);
-        connect(buttons, &QDialogButtonBox::accepted, &editor, &QDialog::accept);
-        connect(buttons, &QDialogButtonBox::rejected, &editor, &QDialog::reject);
-        if (editor.exec() == QDialog::Accepted) {
-            if (!profile_->data()->bookmark(QUrl(url), title->text(), folder->text()))
-                QMessageBox::warning(this, tr("Favoritos"), tr("Não foi possível salvar a edição."));
-            load(true);
-        }
+    auto *page = new LibraryPage(profile_->data(), bookmarks, contentStack_);
+    connect(page, &LibraryPage::openRequested, this, [this](const QUrl &url, bool foreground) {
+        createTab(url, currentWorkspace_, foreground);
     });
-    connect(list, &QListWidget::itemActivated, &dialog, openSelected);
-    auto *timer = new QTimer(&dialog);
-    timer->setSingleShot(true);
-    timer->setInterval(150);
-    connect(search, &QLineEdit::textChanged, timer, qOverload<>(&QTimer::start));
-    connect(timer, &QTimer::timeout, &dialog, [&load] { load(true); });
-    connect(more, &QPushButton::clicked, &dialog, [&load] { load(false); });
-    connect(remove, &QPushButton::clicked, &dialog, [this, list, bookmarks, &load] {
-        if (bookmarks) {
-            if (list->currentItem()) profile_->data()->removeBookmark(QUrl(list->currentItem()->data(Qt::UserRole).toString()));
-        } else if (QMessageBox::question(this, tr("Limpar histórico"), tr("Excluir todas as visitas?"),
-                       QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes) {
-            profile_->data()->clearHistory();
-        }
-        load(true);
-    });
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    layout->addWidget(search);
-    layout->addWidget(list);
-    layout->addWidget(status);
-    layout->addWidget(buttons);
-    load(true);
-    dialog.exec();
+    presentInternalPage(page);
 }
 
 void MainWindow::showSiteControls()
@@ -329,10 +224,13 @@ void MainWindow::showSiteControls()
     WebView *view = currentView();
     if (!view || !Navigation::isWebUrl(view->url())) return;
     const QUrl url = view->url();
-    QDialog dialog(this);
+    auto *page = new QDialog(contentStack_, Qt::Widget);
+    page->setWindowFlags(Qt::Widget);
+    QDialog &dialog = *page;
     dialog.setWindowTitle(tr("Permissões: %1").arg(Navigation::origin(url)));
     auto *layout = new QVBoxLayout(&dialog);
-    layout->addWidget(new QLabel(tr("Desmarcar um bloqueio volta a perguntar no próximo pedido.\nAcessos já ativos terminam ao recarregar ou fechar a página."), &dialog));
+    PageWidgets::heading(layout, tr("Permissões do site"), Navigation::origin(url));
+    auto *choices = PageWidgets::section(layout, tr("Acessos bloqueados"), tr("Desmarcar volta a perguntar no próximo pedido. Acessos já ativos terminam ao recarregar ou fechar a página."));
     const QList<QPair<QString, QString>> permissions {
         {QStringLiteral("notifications"), tr("notificações")},
         {QStringLiteral("geolocation"), tr("localização")},
@@ -345,19 +243,22 @@ void MainWindow::showSiteControls()
         auto *check = new QCheckBox(tr("Bloquear %1").arg(label), &dialog);
         check->setChecked(profile_->data()->permission(url, kind) == -1);
         connect(check, &QCheckBox::toggled, &dialog, [this, url, kind](bool block) { profile_->data()->setPermission(url, kind, block ? -1 : 0); });
-        layout->addWidget(check);
+        choices->addWidget(check);
     }
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
-    dialog.exec();
+    presentInternalPage(page);
 }
 
 void MainWindow::showClearData()
 {
-    QDialog dialog(this);
+    auto *page = new QDialog(contentStack_, Qt::Widget);
+    page->setWindowFlags(Qt::Widget);
+    QDialog &dialog = *page;
     dialog.setWindowTitle(tr("Limpar dados de navegação"));
     auto *layout = new QVBoxLayout(&dialog);
+    PageWidgets::heading(layout, tr("Limpar dados"), tr("Escolha o que remover. Apagar cookies encerra sessões nos sites."));
     auto *history = new QCheckBox(tr("Histórico de visitas"), &dialog);
     auto *period = new QComboBox(&dialog);
     layout->addWidget(new QLabel(tr("Período do histórico de visitas"), &dialog));
@@ -380,27 +281,37 @@ void MainWindow::showClearData()
     }
     for (auto *box : {history, cookies, cache, permissions, certificates}) layout->addWidget(box);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
-    if (dialog.exec() != QDialog::Accepted) return;
-    bool ok = true;
-    if (history->isChecked()) {
-        const qint64 seconds = period->currentData().toLongLong();
-        ok &= profile_->data()->clearHistory(seconds ? QDateTime::currentMSecsSinceEpoch() - seconds * 1000 : 0);
-    }
-    if (permissions->isChecked()) ok &= profile_->data()->clearPermissions();
-    if (certificates->isChecked()) ok &= profile_->removeCertificateExceptions();
-    const QPointer<MainWindow> self(this);
-    profile_->clearWebsiteData(cookies->isChecked(), cache->isChecked(), [self, ok](bool webOk) {
-        if (self) QMessageBox::information(self, tr("Limpar dados"), ok && webOk ? tr("Limpeza concluída.") : tr("Não foi possível limpar todos os dados."));
+    auto *status = new QLabel(&dialog);
+    status->setWordWrap(true);
+    layout->addWidget(status);
+    layout->addStretch();
+    buttons->button(QDialogButtonBox::Ok)->setText(tr("Limpar selecionados"));
+    connect(buttons, &QDialogButtonBox::accepted, page, [this, history, period, cookies, cache, permissions, certificates, buttons, status, page] {
+        buttons->setEnabled(false);
+        bool ok = true;
+        if (history->isChecked()) {
+            const qint64 seconds = period->currentData().toLongLong();
+            ok &= profile_->data()->clearHistory(seconds ? QDateTime::currentMSecsSinceEpoch() - seconds * 1000 : 0);
+        }
+        if (permissions->isChecked()) ok &= profile_->data()->clearPermissions();
+        if (certificates->isChecked()) ok &= profile_->removeCertificateExceptions();
+        const QPointer<QDialog> guard(page);
+        profile_->clearWebsiteData(cookies->isChecked(), cache->isChecked(), [guard, status, buttons, ok](bool webOk) {
+            if (!guard) return;
+            status->setText(ok && webOk ? tr("Limpeza concluída.") : tr("Não foi possível limpar todos os dados."));
+            buttons->setEnabled(true);
+        });
     });
+    presentInternalPage(page);
 }
 
 void MainWindow::exportBookmarks()
 {
     if (exportingBookmarks_) {
-        QMessageBox::information(this, tr("Exportar favoritos"), tr("Uma exportação já está em andamento."));
+        statusBar()->showMessage(tr("Uma exportação já está em andamento."), 5000);
         return;
     }
     const QString path = QFileDialog::getSaveFileName(this, tr("Exportar favoritos"), "favoritos.html", "HTML (*.html)");
@@ -411,7 +322,7 @@ void MainWindow::exportBookmarks()
         exportingBookmarks_ = false;
         unsetCursor();
         if (!error.isEmpty()) QMessageBox::warning(this, tr("Exportar favoritos"), tr("Não foi possível exportar: %1").arg(error));
-        else QMessageBox::information(this, tr("Exportar favoritos"), tr("Favoritos exportados."));
+        else statusBar()->showMessage(tr("Favoritos exportados."), 5000);
     });
 }
 
@@ -434,40 +345,90 @@ void MainWindow::importBookmarks()
         QMessageBox::warning(this, tr("Importar"), tr("A importação falhou. Nenhum favorito foi alterado."));
         return;
     }
-    QMessageBox result(QMessageBox::Information, tr("Importar"), tr("%1 favoritos adicionados.").arg(added.size()), QMessageBox::Close, this);
-    auto *undo = result.addButton(tr("Desfazer importação"), QMessageBox::ActionRole);
-    result.exec();
-    if (result.clickedButton() == undo)
-        for (const auto &entry : added) profile_->data()->removeBookmark(QUrl(entry.url));
+    auto *page = new QDialog(contentStack_, Qt::Widget);
+    page->setWindowTitle(tr("Importação de favoritos"));
+    auto *layout = new QVBoxLayout(page);
+    PageWidgets::heading(layout, tr("Importação concluída"),
+        tr("%1 favoritos adicionados. Os favoritos existentes foram preservados.").arg(added.size()));
+    auto *status = new QLabel(tr("Você pode desfazer a importação antes de sair desta tela."), page);
+    status->setWordWrap(true);
+    layout->addWidget(status);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, page);
+    auto *undo = buttons->addButton(tr("Desfazer importação"), QDialogButtonBox::ActionRole);
+    undo->setEnabled(!added.isEmpty());
+    connect(undo, &QPushButton::clicked, page, [this, added, undo, status] {
+        bool ok = true;
+        for (const auto &entry : added) ok &= profile_->data()->removeBookmark(QUrl(entry.url));
+        undo->setEnabled(false);
+        status->setText(ok ? tr("Importação desfeita. Favoritos anteriores foram preservados.")
+                           : tr("Não foi possível desfazer todos os itens. Confira a biblioteca de favoritos."));
+    });
+    connect(internalNavigation_, &InternalPageStack::changed, page, [page, undo, status] {
+        if (page->isVisible()) return;
+        undo->setEnabled(false);
+        status->setText(tr("A importação foi concluída. O desfazer foi encerrado ao sair desta tela."));
+    });
+    connect(buttons, &QDialogButtonBox::rejected, page, &QDialog::reject);
+    layout->addStretch();
+    layout->addWidget(buttons);
+    presentInternalPage(page);
 }
 
-void MainWindow::manageWorkspace(int action)
+void MainWindow::manageWorkspace(int action, const QString &requestedName, int target)
 {
+    if (target < 0) target = currentWorkspace_;
+    if (target < 0 || target >= workspaceNames_.size()) return;
     if (action == 2) {
-        const int last = workspaceNames_.size() - 1;
-        if (last < 1 || !tabManager_->tabsInWorkspace(last, false).isEmpty()) {
-            QMessageBox::information(this, tr("Excluir espaço"), tr("Mantenha ao menos um espaço. O último espaço precisa estar sem abas."));
-            return;
+        if (workspaceNames_.size() <= 1) return;
+        auto *page = new QDialog(contentStack_, Qt::Widget);
+        page->setWindowFlags(Qt::Widget);
+        page->setWindowTitle(tr("Excluir espaço"));
+        auto *layout = new QVBoxLayout(page);
+        PageWidgets::heading(layout, tr("Excluir %1").arg(workspaceNames_.at(target)),
+            tr("As abas e pastas serão preservadas. Escolha para onde transferir o conteúdo antes de excluir este espaço."));
+        auto *destination = new QComboBox(page);
+        destination->setObjectName("workspaceDestination");
+        destination->setAccessibleName(tr("Espaço de destino"));
+        destination->addItem(tr("Escolha o destino"), -1);
+        for (int i = 0; i < workspaceNames_.size(); ++i)
+            if (i != target) destination->addItem(workspaceNames_.at(i), i);
+        bool occupied = false;
+        for (int id : tabManager_->tabsInWorkspace(target, false)) {
+            const auto *tab = tabManager_->tab(id);
+            if (tab && (tab->url != QUrl("about:blank") || !tab->historyState.isEmpty() || tab->view)) occupied = true;
         }
-        for (const auto &folder : tabManager_->foldersInWorkspace(last)) tabManager_->removeFolder(folder.id);
-        workspaceNames_.removeLast();
-        if (currentWorkspace_ == last) switchWorkspace(0);
-    } else {
-        if (action == 0 && workspaceNames_.size() >= 16) return;
-        bool ok = false;
-        const QString name = QInputDialog::getText(this, action == 0 ? tr("Novo espaço") : tr("Renomear espaço"),
-            tr("Nome:"), QLineEdit::Normal, action == 0 ? QString() : workspaceNames_.at(currentWorkspace_), &ok).trimmed().left(80);
-        if (!ok || name.isEmpty()) return;
-        if (action == 0) workspaceNames_.append(name);
-        else workspaceNames_[currentWorkspace_] = name;
+        layout->addWidget(destination);
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, page);
+        auto *remove = buttons->addButton(tr("Excluir espaço"), QDialogButtonBox::DestructiveRole);
+        remove->setEnabled(!occupied);
+        connect(destination, &QComboBox::currentIndexChanged, page, [destination, remove, occupied] {
+            remove->setEnabled(!occupied || destination->currentData().toInt() >= 0);
+        });
+        layout->addStretch(); layout->addWidget(buttons);
+        connect(buttons, &QDialogButtonBox::rejected, page, &QDialog::reject);
+        connect(remove, &QPushButton::clicked, page, [this, target, destination, page] {
+            removeWorkspace(target, destination->currentData().toInt());
+            page->accept();
+        });
+        presentInternalPage(page);
+        return;
     }
+    if (action == 0 && workspaceNames_.size() >= 16) return;
+    if (requestedName.trimmed().isEmpty()) {
+        showSettings();
+        settingsPage_->beginWorkspaceEdit(action, action == 0 ? QString() : workspaceNames_.at(target), target);
+        return;
+    }
+    const QString name = requestedName.trimmed().left(80);
+    if (action == 0) workspaceNames_.append(name);
+    else workspaceNames_[target] = name;
     settingsPage_->setWorkspaces(workspaceNames_, currentWorkspace_);
     tabManager_->setWorkspaceCount(workspaceNames_.size());
     sidebar_->setWorkspaces(workspaceNames_);
     sidebar_->setWorkspace(currentWorkspace_);
     syncFolders();
     if (action == 0) {
-        if (settingsVisible_) closeSettings();
+        if (settingsVisible_) leaveInternalPages();
         switchWorkspace(workspaceNames_.size() - 1);
         settingsPage_->setWorkspaces(workspaceNames_, currentWorkspace_);
     }
@@ -492,14 +453,34 @@ void MainWindow::closeFollowingTabs(int id)
 
 void MainWindow::openProfile()
 {
-    bool ok = false;
-    const QString name = QInputDialog::getText(this, tr("Abrir perfil"), tr("Nome (letras, números, _ ou -):"), QLineEdit::Normal, {}, &ok);
-    if (!ok) return;
-    if (!QRegularExpression(QStringLiteral("^[A-Za-z0-9_-]{1,32}$")).match(name).hasMatch()) {
-        QMessageBox::warning(this, tr("Perfil"), tr("Nome inválido. Use entre 1 e 32 letras, números, _ ou -."));
-        return;
-    }
-    QProcess::startDetached(QCoreApplication::applicationFilePath(), {QStringLiteral("--profile"), name});
+    auto *page = new QDialog(contentStack_, Qt::Widget);
+    page->setWindowFlags(Qt::Widget);
+    page->setWindowTitle(tr("Perfis"));
+    auto *layout = new QVBoxLayout(page);
+    PageWidgets::heading(layout, tr("Abrir outro perfil"), tr("Cada perfil mantém abas, favoritos e dados separados."));
+    auto *name = new QLineEdit(page);
+    name->setPlaceholderText(tr("Nome do perfil"));
+    name->setAccessibleName(tr("Nome do perfil"));
+    name->setMaxLength(32);
+    auto *status = new QLabel(page);
+    status->setWordWrap(true);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, page);
+    auto *open = buttons->addButton(tr("Abrir perfil"), QDialogButtonBox::ActionRole);
+    layout->addWidget(name);
+    layout->addWidget(status);
+    layout->addStretch();
+    layout->addWidget(buttons);
+    connect(open, &QPushButton::clicked, page, [name, status] {
+        if (!QRegularExpression("^[A-Za-z0-9_-]{1,32}$").match(name->text()).hasMatch()) {
+            status->setText(tr("Use entre 1 e 32 letras, números, _ ou -."));
+            return;
+        }
+        const bool opened = QProcess::startDetached(QCoreApplication::applicationFilePath(), {"--profile", name->text()});
+        status->setText(opened ? tr("Perfil aberto em outra janela do navegador.") : tr("Não foi possível abrir o perfil."));
+    });
+    connect(buttons, &QDialogButtonBox::rejected, page, &QDialog::reject);
+    presentInternalPage(page);
+    name->setFocus();
 }
 
 void MainWindow::setDefaultProfile()
@@ -511,19 +492,20 @@ void MainWindow::setDefaultProfile()
     global.setValue(QStringLiteral("profiles/default"), name);
     global.sync();
     if (global.status() != QSettings::NoError) QMessageBox::warning(this, tr("Perfil"), tr("Não foi possível salvar o perfil padrão."));
+    else statusBar()->showMessage(tr("Perfil padrão atualizado."), 5000);
 }
 
 void MainWindow::setDefaultBrowser()
 {
     const QString desktop = QStandardPaths::locate(QStandardPaths::ApplicationsLocation, QStringLiteral("zenith-browser.desktop"));
     if (desktop.isEmpty()) {
-        QMessageBox::information(this, tr("Navegador padrão"), tr("Instale o aplicativo e seu arquivo .desktop antes de definir o padrão."));
+        statusBar()->showMessage(tr("Instale o aplicativo e seu arquivo .desktop antes de definir o padrão."), 10000);
         return;
     }
     auto *process = new QProcess(this);
     connect(process, &QProcess::finished, this, [this, process](int code, QProcess::ExitStatus status) {
-        QMessageBox::information(this, tr("Navegador padrão"), code == 0 && status == QProcess::NormalExit
-            ? tr("Associação atualizada.") : tr("O ambiente não conseguiu atualizar o navegador padrão."));
+        statusBar()->showMessage(code == 0 && status == QProcess::NormalExit
+            ? tr("Associação atualizada.") : tr("O ambiente não conseguiu atualizar o navegador padrão."), 7000);
         process->deleteLater();
     });
     connect(process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError error) {
@@ -533,4 +515,63 @@ void MainWindow::setDefaultBrowser()
         }
     });
     process->start(QStringLiteral("xdg-settings"), {QStringLiteral("set"), QStringLiteral("default-web-browser"), QStringLiteral("zenith-browser.desktop")});
+}
+
+void MainWindow::removeWorkspace(int target, int destination)
+{
+    if (target < 0 || target >= workspaceNames_.size() || workspaceNames_.size() <= 1) return;
+    const int movedTo = destination >= 0 ? destination : (target == 0 ? 1 : target - 1);
+    if (!tabManager_->removeWorkspace(target, destination)) return;
+    const auto remap = [target, movedTo](int value) {
+        const int moved = value == target ? movedTo : value;
+        return moved - (moved > target ? 1 : 0);
+    };
+    currentWorkspace_ = remap(currentWorkspace_);
+    QHash<int, int> remembered;
+    for (auto it = lastWorkspaceTab_.cbegin(); it != lastWorkspaceTab_.cend(); ++it)
+        if (tabManager_->contains(it.value())) remembered.insert(remap(it.key()), it.value());
+    lastWorkspaceTab_ = remembered;
+    workspaceNames_.removeAt(target);
+    settingsPage_->setWorkspaces(workspaceNames_, currentWorkspace_);
+    sidebar_->setWorkspaces(workspaceNames_);
+    sidebar_->setWorkspace(currentWorkspace_);
+    syncFolders();
+    applyViewLayout();
+    scheduleSessionSave();
+}
+
+void MainWindow::editFolder(int id)
+{
+    QString initial;
+    if (id >= 0) {
+        if (!tabManager_->folderExists(id)) return;
+        for (const auto &folder : tabManager_->foldersInWorkspace(currentWorkspace_))
+            if (folder.id == id) initial = folder.name;
+        if (initial.isEmpty()) return;
+    }
+    const int workspace = currentWorkspace_;
+    auto *page = new QDialog(contentStack_, Qt::Widget);
+    page->setWindowFlags(Qt::Widget);
+    page->setWindowTitle(id < 0 ? tr("Nova pasta") : tr("Renomear pasta"));
+    auto *layout = new QVBoxLayout(page);
+    PageWidgets::heading(layout, page->windowTitle(), tr("Organize as abas do espaço %1.").arg(workspaceNames_.at(workspace)));
+    auto *name = new QLineEdit(initial, page);
+    name->setAccessibleName(tr("Nome da pasta"));
+    name->setPlaceholderText(tr("Nome da pasta"));
+    name->setMaxLength(128);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, page);
+    auto *save = buttons->button(QDialogButtonBox::Save);
+    save->setEnabled(!initial.isEmpty());
+    connect(name, &QLineEdit::textChanged, page, [save](const QString &text) { save->setEnabled(!text.trimmed().isEmpty()); });
+    connect(buttons, &QDialogButtonBox::accepted, page, [this, id, workspace, name, page] {
+        if (workspace >= workspaceNames_.size()) return;
+        if (id < 0) tabManager_->createFolder(workspace, name->text());
+        else if (tabManager_->folderExists(id)) tabManager_->renameFolder(id, name->text());
+        page->accept();
+    });
+    connect(name, &QLineEdit::returnPressed, save, &QPushButton::click);
+    connect(buttons, &QDialogButtonBox::rejected, page, &QDialog::reject);
+    layout->addWidget(name); layout->addStretch(); layout->addWidget(buttons);
+    presentInternalPage(page);
+    name->setFocus(); name->selectAll();
 }

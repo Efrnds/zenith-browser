@@ -1,3 +1,4 @@
+#include <QSettings>
 #include "core/CredentialManager.h"
 
 #include "core/WebView.h"
@@ -112,6 +113,7 @@ QString CredentialBridge::handleMessage(const QString &payload)
     const QString type = object.value(QStringLiteral("type")).toString();
     const QString origin = object.value(QStringLiteral("origin")).toString();
     if (type == QStringLiteral("requestFill")) {
+        if (!QSettings().value("privacy/fillPasswords", true).toBool()) return {};
         if (!matchesPageOrigin(origin))
             return {};
         QStringList accounts;
@@ -142,6 +144,7 @@ QString CredentialBridge::handleMessage(const QString &payload)
 void CredentialBridge::submit(const QString &origin, const QString &username,
                               const QString &password)
 {
+    if (!QSettings().value("privacy/savePasswords", true).toBool()) return;
     if (!matchesPageOrigin(origin) || username.isEmpty() || password.isEmpty())
         return;
     const auto existing = manager_->lookup(origin, username);

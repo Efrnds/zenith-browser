@@ -1,5 +1,6 @@
 #include "ui/UrlBar.h"
 #include "ui/ZenithIcons.h"
+#include "ui/UiMetrics.h"
 #include "core/Navigation.h"
 
 #include <QApplication>
@@ -14,6 +15,14 @@
 #include <QToolButton>
 #include <QCompleter>
 #include <QStringListModel>
+
+void UrlBar::setDownloadActivity(bool active)
+{
+    downloadsButton_->setText(active ? QStringLiteral("•") : QString());
+    downloadsButton_->setToolButtonStyle(active ? Qt::ToolButtonTextBesideIcon : Qt::ToolButtonIconOnly);
+    downloadsButton_->setToolTip(active ? tr("Downloads em andamento · Ctrl+J") : tr("Downloads · Ctrl+J"));
+    downloadsButton_->setAccessibleName(active ? tr("Downloads em andamento") : tr("Downloads"));
+}
 
 UrlBar::UrlBar(QWidget *parent)
     : QWidget(parent)
@@ -30,7 +39,7 @@ UrlBar::UrlBar(QWidget *parent)
     setObjectName(QStringLiteral("urlBar"));
     setAttribute(Qt::WA_StyledBackground, true);
     setAutoFillBackground(true);
-    setFixedHeight(58);
+    setFixedHeight(UiMetrics::Toolbar);
 
     backButton_->setIcon(zenithIcon(ZenithIcon::Back));
     forwardButton_->setIcon(zenithIcon(ZenithIcon::Forward));

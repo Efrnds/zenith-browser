@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(ZenithBrowser VERSION 0.3.1 LANGUAGES CXX)
+project(ZenithBrowser VERSION 1.0.0 LANGUAGES CXX)
+set(ZENITH_VERSION_SUFFIX "" CACHE STRING "Release suffix; empty for a stable release")
+set(ZENITH_RELEASE_VERSION "${PROJECT_VERSION}${ZENITH_VERSION_SUFFIX}")
+file(WRITE "${CMAKE_BINARY_DIR}/zenith-version.txt" "${ZENITH_RELEASE_VERSION}\n")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,6 +35,8 @@ if(ZENITH_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 qt_add_executable(zenith-browser
+    src/core/Preferences.cpp
+    src/core/GtkClipboardGuard.cpp
     src/core/Navigation.cpp
     src/core/SessionStore.cpp
     src/core/BrowserData.cpp
@@ -41,6 +46,10 @@ qt_add_executable(zenith-browser
     src/main.cpp
     src/ui/ThemeManager.cpp
     src/ui/BrowserMenu.cpp
+    src/ui/InternalPageStack.cpp
+    src/ui/FindBar.cpp
+    src/ui/StartPage.cpp
+    src/ui/PageWidgets.cpp
     src/ui/ThemeManager.h
     src/core/AdBlockInterceptor.h
     src/core/AdBlockInterceptor.cpp
@@ -61,6 +70,7 @@ qt_add_executable(zenith-browser
     src/ui/MainWindow.h
     src/ui/MainWindow.cpp
     src/ui/MainWindowTools.cpp
+    src/ui/LibraryPage.cpp
     src/ui/Sidebar.h
     src/ui/Sidebar.cpp
     src/ui/TabItemWidget.h
@@ -77,7 +87,7 @@ qt_add_executable(zenith-browser
 )
 
 target_include_directories(zenith-browser PRIVATE src)
-target_compile_definitions(zenith-browser PRIVATE ZENITH_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(zenith-browser PRIVATE ZENITH_VERSION="${ZENITH_RELEASE_VERSION}")
 
 target_link_libraries(zenith-browser PRIVATE
     Qt6::Widgets
@@ -88,7 +98,12 @@ target_link_libraries(zenith-browser PRIVATE
     Qt6::Sql
     PkgConfig::WEBKITGTK
     X11::X11
+    ${CMAKE_DL_LIBS}
 )
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(zenith-browser PRIVATE "LINKER:--export-dynamic-symbol=gtk_clipboard_request_targets")
+endif()
 
 include(CheckIPOSupported)
 check_ipo_supported(RESULT ZENITH_IPO_SUPPORTED OUTPUT ZENITH_IPO_ERROR)
@@ -114,8 +129,18 @@ include(CTest)
 if(BUILD_TESTING)
     find_package(Qt6 REQUIRED COMPONENTS Test)
     qt_add_executable(zenith-core-tests
+        src/core/Preferences.cpp
+    src/core/GtkClipboardGuard.cpp
+        src/ui/MainWindow.cpp
+        src/ui/MainWindowTools.cpp
+        src/ui/LibraryPage.cpp
+        src/ui/SplitView.cpp
         src/ui/ThemeManager.cpp
         src/ui/BrowserMenu.cpp
+        src/ui/InternalPageStack.cpp
+    src/ui/FindBar.cpp
+        src/ui/StartPage.cpp
+        src/ui/PageWidgets.cpp
         src/ui/SettingsPage.cpp
         src/ui/Sidebar.cpp
         src/ui/Sidebar.h
@@ -150,6 +175,7 @@ if(BUILD_TESTING)
         src/core/WebView.cpp
     )
     target_include_directories(zenith-core-tests PRIVATE src)
+    target_compile_definitions(zenith-core-tests PRIVATE ZENITH_VERSION="${ZENITH_RELEASE_VERSION}")
     target_link_libraries(zenith-core-tests PRIVATE
         Qt6::Test
         Qt6::Network
@@ -160,7 +186,11 @@ if(BUILD_TESTING)
         Qt6::Svg
         PkgConfig::WEBKITGTK
         X11::X11
+        ${CMAKE_DL_LIBS}
     )
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_options(zenith-core-tests PRIVATE "LINKER:--export-dynamic-symbol=gtk_clipboard_request_targets")
+    endif()
     if(WIN32)
         target_link_libraries(zenith-core-tests PRIVATE Advapi32)
     elseif(APPLE)
@@ -180,8 +210,8 @@ install(FILES packaging/zenith-browser.desktop DESTINATION ${CMAKE_INSTALL_DATAD
 install(FILES resources/icons/zenith.svg DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps RENAME zenith-browser.svg)
 install(FILES resources/icons/zenith.png DESTINATION ${CMAKE_INSTALL_DATADIR}/pixmaps RENAME zenith-browser.png)
 install(FILES README.md DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/zenith-browser)
-install(FILES docs/VALIDATION.md docs/ROADMAP.md docs/OUTLOOK-COMPATIBILITY.md docs/MEMORY.md docs/ADBLOCK.md docs/SECURITY.md docs/APPEARANCE.md DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/zenith-browser/docs)
-set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+install(FILES docs/VALIDATION.md docs/ROADMAP.md docs/OUTLOOK-COMPATIBILITY.md docs/MEMORY.md docs/ADBLOCK.md docs/SECURITY.md docs/APPEARANCE.md docs/RELEASE.md docs/PLANO-1.0.md docs/PREFERENCES.md docs/EXECUCAO-1.0.md DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/zenith-browser/docs)
+set(CPACK_PACKAGE_VERSION ${ZENITH_RELEASE_VERSION})
 set(CPACK_PACKAGE_CONTACT "Zenith Browser")
 set(CPACK_GENERATOR TGZ)
 include(CPack)

@@ -1,4 +1,6 @@
+#include <QSettings>
 #include "core/WebView.h"
+#include "ui/ThemeManager.h"
 
 #include "core/AdBlockInterceptor.h"
 #include "core/WebProfile.h"
@@ -574,8 +576,24 @@ gboolean WebView::Impl::onDecidePolicy(WebKitWebView *, WebKitPolicyDecision *de
     if (type == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION || type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION) {
         auto *navigation = WEBKIT_NAVIGATION_POLICY_DECISION(decision);
         WebKitNavigationAction *action = webkit_navigation_policy_decision_get_navigation_action(navigation);
-        const QUrl url(QString::fromUtf8(webkit_uri_request_get_uri(webkit_navigation_action_get_request(action))));
+        if (!action) return FALSE;
+        WebKitURIRequest *request = webkit_navigation_action_get_request(action);
+        if (!request) return FALSE;
+        const QUrl url(QString::fromUtf8(webkit_uri_request_get_uri(request)));
         const bool gesture = webkit_navigation_action_is_user_gesture(action);
+        const guint button = webkit_navigation_action_get_mouse_button(action);
+        const guint modifiers = webkit_navigation_action_get_modifiers(action);
+        const bool newTabClick = button == 2 || (button == 1 && (modifiers & GDK_CONTROL_MASK));
+        if (gesture && newTabClick && (Navigation::isWebUrl(url)
+                || (url.isLocalFile() && !Navigation::isWebUrl(view->url())))) {
+            webkit_policy_decision_ignore(decision);
+            const QPointer<WebView> safe(view);
+            const bool foreground = (modifiers & GDK_SHIFT_MASK) != 0;
+            QMetaObject::invokeMethod(view, [safe, url, foreground] {
+                if (safe) Q_EMIT safe->newTabRequested(url, foreground);
+            }, Qt::QueuedConnection);
+            return TRUE;
+        }
         if (!Navigation::outlookUserAgent(url).isEmpty()) view->impl_->applyUserAgent(url);
         if (type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION && !gesture) {
             webkit_policy_decision_ignore(decision);
@@ -750,7 +768,8 @@ gboolean WebView::Impl::onKeyPress(GtkWidget *, GdkEventKey *event, gpointer use
         modifiers |= Qt::ControlModifier;
     if (shift)
         modifiers |= Qt::ShiftModifier;
-    return keySink(key, modifiers, text) ? TRUE : FALSE;
+    const auto sink = keySink;
+    return sink && sink(key, modifiers, text) ? TRUE : FALSE;
 }
 
 void WebView::setKeySink(KeySink sink, std::function<void()> cancelled)
@@ -775,6 +794,19 @@ WebView::WebView(WebProfile *profile, QWidget *parent, WebView *opener)
 
     gtk_init_check(nullptr, nullptr);
     impl_->plug = gtk_plug_new(0);
+    gtk_window_set_decorated(GTK_WINDOW(impl_->plug), FALSE);
+    gtk_container_set_border_width(GTK_CONTAINER(impl_->plug), 0);
+    gtk_widget_set_name(impl_->plug, "zenithWebHost");
+    auto *hostStyle = gtk_css_provider_new();
+    gtk_style_context_add_provider(gtk_widget_get_style_context(impl_->plug), GTK_STYLE_PROVIDER(hostStyle), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    g_object_set_data_full(G_OBJECT(impl_->plug), "zenith-host-style", hostStyle, g_object_unref);
+    const auto styleHost = [this, hostStyle] {
+        const QByteArray css = "#zenithWebHost { background-color: "
+            + ThemeManager::instance().color("#121214").name().toUtf8() + "; border: 0; padding: 0; }";
+        gtk_css_provider_load_from_data(hostStyle, css.constData(), css.size(), nullptr);
+    };
+    styleHost();
+    connect(&ThemeManager::instance(), &ThemeManager::changed, this, styleHost);
     WebKitUserContentManager *content = webkit_user_content_manager_new();
     if (impl_->blocker && impl_->blocker->isEnabled()) {
         const char *const sites[] = {
@@ -1295,3 +1327,14 @@ void WebView::setMessageHandler(MessageHandler handler)
 }
 
 #include "WebView.moc"
+
+void WebView::applyBrowsingPreferences()
+{
+    if (!impl_->webView) return;
+    auto *settings = webkit_web_view_get_settings(impl_->webView);
+    QSettings preferences;
+    webkit_settings_set_enable_javascript(settings, preferences.value("web/javascript", true).toBool());
+    webkit_settings_set_enable_smooth_scrolling(settings, preferences.value("web/smoothScrolling", true).toBool());
+    webkit_settings_set_default_font_size(settings, qBound(12, preferences.value("web/defaultFontSize", 16).toInt(), 32));
+    setZoom(impl_->profile->data()->zoom(url()));
+}

@@ -1,4 +1,6 @@
 #include "ui/ThemeManager.h"
+#include "ui/UiMetrics.h"
+#include "core/Preferences.h"
 #include <QApplication>
 #include <QFile>
 #include <QPalette>
@@ -6,6 +8,9 @@
 #include <QStyleHints>
 #include <QRegularExpression>
 #include <QWidget>
+#include <QFocusEvent>
+#include <QStyle>
+#include <cmath>
 #undef signals
 #undef slots
 #include <gtk/gtk.h>
@@ -36,15 +41,8 @@ ThemeManager &ThemeManager::instance()
 
 ThemeManager::ThemeManager()
 {
-    QSettings settings;
-    mode_ = settings.value("appearance/theme", "dark").toString();
-    accent_ = settings.value("appearance/accent", "violet").toString();
-    siteMode_ = settings.value("appearance/sites", "system").toString();
-    textRendering_ = settings.value("appearance/textRendering", "smooth").toString();
-    if (!QStringList{"system", "light", "dark"}.contains(mode_)) mode_ = "dark";
-    if (!QStringList{"violet", "blue", "teal", "amber"}.contains(accent_)) accent_ = "violet";
-    if (!QStringList{"system", "light", "dark"}.contains(siteMode_)) siteMode_ = "system";
-    if (!QStringList{"system", "smooth", "sharp"}.contains(textRendering_)) textRendering_ = "smooth";
+    qApp->installEventFilter(this);
+    readPreferences();
     systemDark_ = qApp->palette().color(QPalette::Window).lightness() < 128;
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     if (qApp->styleHints()->colorScheme() != Qt::ColorScheme::Unknown)
@@ -67,11 +65,63 @@ ThemeManager::ThemeManager()
     }
 }
 
+bool ThemeManager::eventFilter(QObject *watched, QEvent *event)
+{
+    if (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut) {
+        if (auto *widget = qobject_cast<QWidget *>(watched)) {
+            const auto *focus = static_cast<QFocusEvent *>(event);
+            const bool keyboard = event->type() == QEvent::FocusIn
+                && (focus->reason() == Qt::TabFocusReason || focus->reason() == Qt::BacktabFocusReason
+                    || focus->reason() == Qt::ShortcutFocusReason);
+            widget->setProperty("keyboardFocus", keyboard);
+            widget->style()->unpolish(widget);
+            widget->style()->polish(widget);
+        }
+    }
+    return QObject::eventFilter(watched, event);
+}
+
 bool ThemeManager::dark() const { return mode_ == "dark" || (mode_ == "system" && systemDark_); }
+
+QColor ThemeManager::color(Role role) const
+{
+    switch (role) {
+    case Role::Content: return color("#121214");
+    case Role::Sidebar: return color("#18181b");
+    case Role::Field: return color("#202023");
+    case Role::Raised: return color("#27272a");
+    case Role::Divider: return color("#323238");
+    case Role::Border: return color("#3f3f46");
+    case Role::Text: return color("#f4f4f5");
+    case Role::Secondary: return color("#a1a1aa");
+    case Role::AccentText: case Role::Focus: return color("#8b7cf6");
+    case Role::AccentFill: return color("#5b4fc4");
+    case Role::Error: case Role::Destructive: return QColor(dark() ? "#ffb4ab" : "#9c252c");
+    }
+    return {};
+}
 
 QColor ThemeManager::color(const QString &key) const
 {
     const bool d = dark();
+    if (accent_.startsWith('#') && (key == "#8b7cf6" || key == "#5b4fc4")) {
+        const QColor custom(accent_);
+        const bool foreground = key == "#8b7cf6";
+        const QColor background = foreground ? color("#27272a") : QColor(Qt::white);
+        const auto luminance = [](const QColor &value) {
+            const auto linear = [](double c) { return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); };
+            return 0.2126 * linear(value.redF()) + 0.7152 * linear(value.greenF()) + 0.0722 * linear(value.blueF());
+        };
+        double lightness = foreground && d ? 0.76 : 0.30;
+        QColor result;
+        for (int step = 0; step < 51; ++step) {
+            result = QColor::fromHslF(qMax(0.0f, custom.hslHueF()), custom.hslSaturationF(), lightness);
+            const double a = luminance(result), b = luminance(background);
+            if ((qMax(a, b) + 0.05) / (qMin(a, b) + 0.05) >= 4.5) break;
+            lightness = qBound(0.0, lightness + (foreground && d ? 0.02 : -0.02), 1.0);
+        }
+        return result;
+    }
     if (key == "#8b7cf6") {
         if (accent_ == "blue") return QColor(d ? "#91c5ff" : "#175ca5");
         if (accent_ == "teal") return QColor(d ? "#76d9c0" : "#08745e");
@@ -122,10 +172,10 @@ void ThemeManager::applyWebAppearance()
 void ThemeManager::apply()
 {
     QPalette palette;
-    palette.setColor(QPalette::Window, color("#121214"));
-    palette.setColor(QPalette::Base, color("#202023"));
-    palette.setColor(QPalette::AlternateBase, color("#18181b"));
-    palette.setColor(QPalette::Button, color("#18181b"));
+    palette.setColor(QPalette::Window, color(Role::Content));
+    palette.setColor(QPalette::Base, color(Role::Field));
+    palette.setColor(QPalette::AlternateBase, color(Role::Sidebar));
+    palette.setColor(QPalette::Button, color(Role::Sidebar));
     for (auto role : {QPalette::WindowText, QPalette::Text, QPalette::ButtonText, QPalette::ToolTipText})
         palette.setColor(role, color("#f4f4f5"));
     palette.setColor(QPalette::PlaceholderText, color("#a1a1aa"));
@@ -139,6 +189,18 @@ void ThemeManager::apply()
     QFile file(":/style.qss");
     if (file.open(QIODevice::ReadOnly)) {
         QString sheet = QString::fromUtf8(file.readAll());
+        sheet.replace("@hit@", QString::number(UiMetrics::Hit));
+        sheet.replace("@page@", QString::number(UiMetrics::Page));
+        sheet.replace("@tiny@", QString::number(UiMetrics::Tiny));
+        sheet.replace("@small@", QString::number(UiMetrics::Small));
+        sheet.replace("@related@", QString::number(UiMetrics::Related));
+        sheet.replace("@section@", QString::number(UiMetrics::Section));
+        sheet.replace("@large@", QString::number(UiMetrics::Large));
+        sheet.replace("@error@", color(Role::Error).name());
+        sheet.replace("@danger@", color(Role::Destructive).name());
+        QSettings preferences;
+        sheet.replace("font-size: 13px;", QString("font-size: %1px;").arg(qBound(11, preferences.value("appearance/fontSize", 13).toInt(), 18)));
+        sheet.replace("border-radius: 10px;", QString("border-radius: %1px;").arg(qBound(0, preferences.value("appearance/cornerRadius", 10).toInt(), 20)));
         QRegularExpression expression("#[0-9a-fA-F]{6}\\b");
         auto matches = expression.globalMatch(sheet);
         QString rendered; qsizetype offset = 0;
@@ -160,9 +222,28 @@ void ThemeManager::setMode(const QString &value)
     if (value != "system" && value != "light" && value != "dark") return;
     mode_ = value; QSettings().setValue("appearance/theme", value); apply();
 }
+void ThemeManager::reloadPreferences()
+{
+    readPreferences();
+    apply();
+}
+
+void ThemeManager::readPreferences()
+{
+    mode_ = Preferences::value("appearance/theme").toString();
+    accent_ = Preferences::value("appearance/accent").toString();
+    siteMode_ = Preferences::value("appearance/sites").toString();
+    textRendering_ = Preferences::value("appearance/textRendering").toString();
+    if (!QStringList{"system", "light", "dark"}.contains(mode_)) mode_ = "dark";
+    if (!QStringList{"violet", "blue", "teal", "amber"}.contains(accent_)
+        && !QRegularExpression("^#[0-9a-fA-F]{6}$").match(accent_).hasMatch()) accent_ = "violet";
+    if (!QStringList{"system", "light", "dark"}.contains(siteMode_)) siteMode_ = "system";
+    if (!QStringList{"system", "smooth", "sharp"}.contains(textRendering_)) textRendering_ = "smooth";
+}
 void ThemeManager::setAccent(const QString &value)
 {
-    if (value != "violet" && value != "blue" && value != "teal" && value != "amber") return;
+    if (value != "violet" && value != "blue" && value != "teal" && value != "amber"
+        && !QRegularExpression("^#[0-9a-fA-F]{6}$").match(value).hasMatch()) return;
     accent_ = value; QSettings().setValue("appearance/accent", value); apply();
 }
 void ThemeManager::setSiteMode(const QString &value)

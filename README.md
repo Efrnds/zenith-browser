@@ -1,10 +1,41 @@
 # Zenith Browser
 
 Navegador Linux em C++20, Qt Widgets e WebKitGTK, com abas verticais, pastas,
-workspaces e split view. Versão 0.3.1 em desenvolvimento. O host gráfico usa
+workspaces e split view. O código local está em 1.0.0; a publicação aguarda as
+conferências finais e o envio ao GitHub. O host gráfico usa
 X11 ou XWayland; não há port nativo Wayland, Windows ou macOS neste executável.
 
-Atualizações recentes: controles reorganizados, menu principal agrupado e espaços
+A RC3 reorganiza as configurações em oito categorias, adiciona densidades e
+restauração por seção, preserva o retorno entre ferramentas e transfere abas ao
+excluir espaços. Estado da execução e bloqueios de lançamento em
+[EXECUCAO-1.0.md](docs/EXECUCAO-1.0.md); registro de opções em
+[PREFERENCES.md](docs/PREFERENCES.md).
+
+A RC4 testa as bibliotecas sem depender do motor, preserva seleção e rolagem
+ao atualizar páginas de resultados, melhora acessibilidade das abas e busca de
+preferências. A validação gráfica, escalas, medições e conferência do pacote
+podem ser executadas em uma sessão X11/XWayland com:
+
+```sh
+python3 tools/validate-release.py --build build --package
+```
+
+O comando usa dados de teste isolados e guarda logs, capturas e JSON em
+`~/.cache/zenith-validation/`. Sem display, `--offscreen` verifica widgets e
+registra a integração gráfica como pendente; essa opção não aprova a release.
+
+Atualizações recentes: downloads, favoritos, histórico, credenciais, permissões,
+edição de favoritos e perfis dentro da janela; Ctrl+F usa uma barra no conteúdo.
+Inclui proteção contra resposta inválida do clipboard GTK e abertura de links
+pelo botão do meio em abas de segundo plano, sem criar imediatamente outra WebView.
+Configurações reúnem preferências e ferramentas do navegador, com busca, cor
+personalizada, dimensões da lateral e das abas, fonte da interface, fonte e zoom
+dos sites, opções de senhas e destino dos downloads. Criação e renomeação de
+espaços e busca personalizada usam formulários internos.
+
+Também inclui nova aba nativa com busca, configurações agrupadas com
+prévia de tema, listas detalhadas e moldura integrada ao tema. Também inclui
+controles reorganizados, menu principal agrupado e espaços
 no rodapé, temas configuráveis e criação visível de até 16 espaços,
 preferência de tema dos sites e suavização de texto em [Aparência](docs/APPEARANCE.md).
 Também inclui compatibilidade de identificação no Outlook, descarte e
@@ -13,6 +44,12 @@ atualização de listas com limites e preservação das regras em caso de falha.
 Detalhes e validações pendentes estão em [docs/ROADMAP.md](docs/ROADMAP.md),
 [docs/MEMORY.md](docs/MEMORY.md), [docs/ADBLOCK.md](docs/ADBLOCK.md) e
 [docs/SECURITY.md](docs/SECURITY.md).
+
+O fluxo de tags e os critérios para a versão estável estão em
+[docs/RELEASE.md](docs/RELEASE.md). Esta candidata ainda requer homologação gráfica;
+não foi publicada uma versão estável no GitHub.
+O planejamento de acabamento visual e usabilidade está em
+[docs/PLANO-1.0.md](docs/PLANO-1.0.md), com prioridades e critérios de aceite.
 
 ## Compilar
 

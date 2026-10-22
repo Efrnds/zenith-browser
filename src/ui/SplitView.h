@@ -2,12 +2,14 @@
 
 #include <QPointer>
 #include <QWidget>
+#include <QUrl>
 
 class QLabel;
 class QResizeEvent;
 class QSplitter;
 class QStackedLayout;
 class WebView;
+class StartPage;
 
 class SplitView final : public QWidget
 {
@@ -21,7 +23,12 @@ public:
     void resizeEvent(QResizeEvent *event) override;
     void setSplitViews(WebView *primary, WebView *secondary);
     void showEmptyState();
+    void showStartPage(const QString &workspace, const QString &searchTemplate);
     [[nodiscard]] bool isSplit() const;
+
+signals:
+    void navigateRequested(const QUrl &url);
+    void commandRequested(int command);
 
 private:
     void hideCurrentViews();
@@ -29,6 +36,7 @@ private:
 
     QStackedLayout *stack_;
     QLabel *emptyState_;
+    StartPage *startPage_;
     QSplitter *splitter_;
     QWidget *page_ = nullptr;
     QPointer<WebView> primary_;

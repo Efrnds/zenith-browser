@@ -42,6 +42,7 @@ public:
     void find(const QString &text, bool backwards = false);
     QString lastFindText() const;
     void finishFind();
+    void applyBrowsingPreferences();
     void setZoom(double value);
     double zoom() const;
     void setMuted(bool muted);
@@ -81,6 +82,7 @@ signals:
     void loadError(const QString &message);
     void audioChanged();
     void pageFocused();
+    void newTabRequested(const QUrl &url, bool foreground);
 
 protected:
     void resizeEvent(QResizeEvent *event) override;

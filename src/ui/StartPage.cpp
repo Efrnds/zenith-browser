@@ -1,6 +1,7 @@
 #include "ui/StartPage.h"
 #include "ui/ZenithIcons.h"
 #include "core/Navigation.h"
+#include "ui/UiMetrics.h"
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -10,17 +11,18 @@
 StartPage::StartPage(QWidget *parent) : QWidget(parent)
 {
     setObjectName("startPage");
+    setAttribute(Qt::WA_StyledBackground, true);
     auto *content = new QWidget(this);
     content->setMaximumWidth(620);
     auto *body = new QVBoxLayout(content);
-    body->setContentsMargins(24, 24, 24, 24);
-    body->setSpacing(16);
+    body->setContentsMargins(UiMetrics::Page, UiMetrics::Page, UiMetrics::Page, UiMetrics::Page);
+    body->setSpacing(UiMetrics::Section);
     workspace_ = new QLabel(content);
     workspace_->setObjectName("startWorkspace");
     workspace_->setWordWrap(true);
     auto *brand = new QLabel("Zenith", content);
     brand->setObjectName("startBrand");
-    auto *intro = new QLabel(tr("Um espaço para o que vem a seguir."), content);
+    auto *intro = new QLabel(tr("Pesquise na web ou abra um endereço."), content);
     intro->setObjectName("startIntro");
     intro->setWordWrap(true);
     body->addWidget(workspace_);
@@ -51,11 +53,13 @@ StartPage::StartPage(QWidget *parent) : QWidget(parent)
     };
     connect(search_, &QLineEdit::returnPressed, this, submit);
     connect(open, &QPushButton::clicked, this, submit);
-    connect(search_, &QLineEdit::textChanged, open, [open](const QString &text) { open->setEnabled(!text.trimmed().isEmpty()); });
+    connect(search_, &QLineEdit::textChanged, open, [this, open](const QString &text) {
+        open->setEnabled(!Navigation::fromInput(text, searchTemplate_).isEmpty());
+    });
     auto *actions = new QHBoxLayout;
     actions->setSpacing(4);
     const QList<QPair<QString, int>> destinations{{tr("Favoritos"), Navigation::Bookmarks}, {tr("Histórico"), Navigation::History}, {tr("Downloads"), Navigation::Downloads}};
-    const QList<ZenithIcon> icons{ZenithIcon::Bookmark, ZenithIcon::Back, ZenithIcon::Download};
+    const QList<ZenithIcon> icons{ZenithIcon::Bookmark, ZenithIcon::History, ZenithIcon::Download};
     for (int index = 0; index < destinations.size(); ++index) {
         auto *button = new QPushButton(destinations.at(index).first, content);
         button->setObjectName("startAction");
@@ -75,14 +79,19 @@ StartPage::StartPage(QWidget *parent) : QWidget(parent)
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(8, 8, 8, 8);
     layout->addStretch(2);
-    layout->addWidget(content, 0, Qt::AlignHCenter);
+    auto *center = new QHBoxLayout;
+    center->addStretch();
+    center->addWidget(content, 100);
+    center->addStretch();
+    layout->addLayout(center);
     layout->addStretch(3);
     setSearchTemplate("https://duckduckgo.com/?q=%1");
 }
 
 void StartPage::setWorkspaceName(const QString &value)
 {
-    workspace_->setText(tr("Espaço · %1").arg(value));
+    workspace_->setText(value);
+    workspace_->setAccessibleName(tr("Espaço atual: %1").arg(value));
 }
 
 void StartPage::setSearchTemplate(const QString &value)

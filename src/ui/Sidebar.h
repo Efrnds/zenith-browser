@@ -74,6 +74,7 @@ signals:
     void muteTabRequested(int id);
     void closeOtherTabsRequested(int id);
     void createFolderRequested(const QString &name);
+    void folderEditRequested(int id);
     void renameFolderRequested(int id, const QString &name);
     void removeFolderRequested(int id);
     void folderMoveRequested(int id, int delta);

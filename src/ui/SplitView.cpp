@@ -1,4 +1,5 @@
 #include "ui/SplitView.h"
+#include "ui/StartPage.h"
 
 #include "core/WebView.h"
 
@@ -16,6 +17,7 @@ SplitView::SplitView(QWidget *parent)
     : QWidget(parent)
     , stack_(new QStackedLayout(this))
     , emptyState_(new QLabel(tr("Nenhuma aba aberta.\nCrie uma aba para começar."), this))
+    , startPage_(new StartPage(this))
     , splitter_(new QSplitter(Qt::Horizontal, this))
 {
     setObjectName(QStringLiteral("contentSurface"));
@@ -32,6 +34,9 @@ SplitView::SplitView(QWidget *parent)
     });
     page_ = new QWidget;
     stack_->addWidget(emptyState_);
+    stack_->addWidget(startPage_);
+    connect(startPage_, &StartPage::navigateRequested, this, &SplitView::navigateRequested);
+    connect(startPage_, &StartPage::commandRequested, this, &SplitView::commandRequested);
     stack_->addWidget(page_);
     stack_->addWidget(splitter_);
     stack_->setCurrentWidget(emptyState_);
@@ -99,6 +104,15 @@ void SplitView::showEmptyState()
     secondary_.clear();
     split_ = false;
     stack_->setCurrentWidget(emptyState_);
+}
+
+void SplitView::showStartPage(const QString &workspace, const QString &searchTemplate)
+{
+    hideCurrentViews();
+    primary_.clear(); secondary_.clear(); split_ = false;
+    startPage_->setWorkspaceName(workspace);
+    startPage_->setSearchTemplate(searchTemplate);
+    stack_->setCurrentWidget(startPage_);
 }
 
 bool SplitView::isSplit() const

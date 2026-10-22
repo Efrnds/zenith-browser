@@ -19,6 +19,7 @@ public:
     void setNavigationState(bool canGoBack, bool canGoForward);
     void setPageAvailable(bool available);
     void setLoading(bool loading);
+    void setDownloadActivity(bool active);
     void setCompactEnabled(bool enabled);
     QPoint menuPosition() const;
     void setSearchTemplate(const QString &searchTemplate);

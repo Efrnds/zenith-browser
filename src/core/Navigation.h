@@ -15,6 +15,7 @@ enum Command {
     OpenProfile, DefaultProfile, DefaultBrowser, SaveSession, CloseWindow
 };
 int command(int key, Qt::KeyboardModifiers modifiers);
+QString shortcutLabel(int command);
 QString origin(const QUrl &url);
 bool isWebUrl(const QUrl &url);
 bool canUseCredentials(const QUrl &url, bool certificateException);

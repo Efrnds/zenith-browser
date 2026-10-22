@@ -17,6 +17,8 @@
 #include <QStandardPaths>
 #include <QTimer>
 #include <QSettings>
+#include <QTranslator>
+#include <QLibraryInfo>
 
 #undef signals
 #undef slots
@@ -53,9 +55,13 @@ int main(int argc, char *argv[])
     QApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
 
     QApplication application(argc, argv);
+    QTranslator qtPortuguese;
+    if (qtPortuguese.load("qtbase_pt_BR", QLibraryInfo::path(QLibraryInfo::TranslationsPath)))
+        application.installTranslator(&qtPortuguese);
     QCoreApplication::setOrganizationName(QStringLiteral("Zenith"));
     QCoreApplication::setOrganizationDomain(QStringLiteral("zenith.local"));
     QCoreApplication::setApplicationName(QStringLiteral("Zenith Browser"));
+    application.setDesktopFileName(QStringLiteral("zenith-browser"));
     QCoreApplication::setApplicationVersion(QStringLiteral(ZENITH_VERSION));
 
     QCommandLineParser parser;
@@ -90,6 +96,8 @@ int main(int argc, char *argv[])
     if (profile != "default")
         QCoreApplication::setApplicationName(QStringLiteral("Zenith Browser-%1").arg(profile));
     const bool privateMode = parser.isSet("private");
+    application.setProperty("zenithProfile", profile);
+    application.setProperty("zenithPrivate", privateMode);
     if (parser.positionalArguments().size() > 100) {
         fprintf(stderr, "Abra no máximo 100 endereços por chamada.\n");
         return 2;

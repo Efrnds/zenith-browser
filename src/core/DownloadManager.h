@@ -8,6 +8,7 @@
 struct _WebKitWebContext;
 struct _WebKitDownload;
 class QWidget;
+class QDialog;
 class QTimer;
 
 class DownloadManager final : public QObject
@@ -30,7 +31,8 @@ public:
     QList<Item> items() const;
     void cancel(int id);
     bool active() const;
-    void show(QWidget *parent);
+    QDialog *createPage(QWidget *parent);
+    static QString uniqueDestination(const QString &directory, const QString &suggestion);
     static QString safeName(const QString &suggestion);
     void setDestinationChooser(std::function<QString(const QString &)> chooser);
 signals:

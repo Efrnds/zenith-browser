@@ -17,6 +17,11 @@
 
 void zenithCookiesLoaded(GObject *source, GAsyncResult *result, gpointer user);
 
+struct CookieWarmup {
+    QPointer<WebProfile> profile;
+    WebKitWebsiteDataManager *manager;
+};
+
 WebProfile::WebProfile(const QString &dataDirectory, const QString &cacheDirectory, QObject *parent, bool ephemeral)
     : QObject(parent)
     , exceptionsFile_(dataDirectory + QStringLiteral("/tls-exceptions.conf"))
@@ -74,7 +79,8 @@ WebProfile::WebProfile(const QString &dataDirectory, const QString &cacheDirecto
     setPrivacyPolicy(privacy.value(QStringLiteral("privacy/blockThirdPartyCookies"), false).toBool(),
         privacy.value(QStringLiteral("privacy/trackingPrevention"), false).toBool());
     webkit_website_data_manager_set_persistent_credential_storage_enabled(dataManager_, !ephemeral_);
-    webkit_cookie_manager_get_all_cookies(cookies, nullptr, zenithCookiesLoaded, new QPointer<WebProfile>(this));
+    webkit_cookie_manager_get_all_cookies(cookies, nullptr, zenithCookiesLoaded,
+        new CookieWarmup{this, WEBKIT_WEBSITE_DATA_MANAGER(g_object_ref(dataManager_))});
 
     settings_ = createSettings();
 
@@ -96,7 +102,10 @@ _WebKitSettings *WebProfile::createSettings() const
     webkit_settings_set_media_playback_requires_user_gesture(settings_, TRUE);
     webkit_settings_set_enable_developer_extras(settings_, TRUE);
     webkit_settings_set_enable_fullscreen(settings_, TRUE);
-    webkit_settings_set_enable_smooth_scrolling(settings_, TRUE);
+    QSettings preferences;
+    webkit_settings_set_enable_javascript(settings_, preferences.value("web/javascript", true).toBool());
+    webkit_settings_set_enable_smooth_scrolling(settings_, preferences.value("web/smoothScrolling", true).toBool());
+    webkit_settings_set_default_font_size(settings_, qBound(12, preferences.value("web/defaultFontSize", 16).toInt(), 32));
     webkit_settings_set_enable_webgl(settings_, TRUE);
     webkit_settings_set_enable_webaudio(settings_, TRUE);
     webkit_settings_set_enable_mediasource(settings_, TRUE);
@@ -279,8 +288,12 @@ void zenithCookiesLoaded(GObject *source, GAsyncResult *result, gpointer user)
         g_error_free(error);
     if (cookies)
         g_list_free_full(cookies, reinterpret_cast<GDestroyNotify>(soup_cookie_free));
-    std::unique_ptr<QPointer<WebProfile>> profile(static_cast<QPointer<WebProfile> *>(user));
-    if (*profile) (*profile)->markCookiesReady();
+    std::unique_ptr<CookieWarmup> warmup(static_cast<CookieWarmup *>(user));
+    // GTask releases its cookie-manager reference after this callback returns.
+    // WebKit's cookie manager needs its website-data manager during finalization.
+    g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, +[](gpointer) -> gboolean { return G_SOURCE_REMOVE; },
+        warmup->manager, g_object_unref);
+    if (warmup->profile) warmup->profile->markCookiesReady();
 }
 
 void WebProfile::markCookiesReady()
