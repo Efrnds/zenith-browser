@@ -51,6 +51,7 @@ struct WebView::Impl
     ComPtr<ICoreWebView2Environment> environment;
     ComPtr<ICoreWebView2Controller> controller;
     ComPtr<ICoreWebView2> webView;
+    ComPtr<ICoreWebView2_4> webView4;
     PopupFactory popupFactory;
     MessageHandler messageHandler;
     QString pendingUrl;
@@ -76,7 +77,7 @@ struct WebView::Impl
         }
         QPointer<WebView> guard(owner);
         const HRESULT result = environment->CreateCoreWebView2Controller(
-            static_cast<HWND>(owner->winId()),
+            reinterpret_cast<HWND>(owner->winId()),
             Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                 [this, guard](HRESULT status, ICoreWebView2Controller *created) -> HRESULT {
                     if (!guard) return S_OK;
@@ -87,6 +88,7 @@ struct WebView::Impl
                     controller = created;
                     controller->get_CoreWebView2(&webView);
                     if (!webView) return S_OK;
+                    webView.As(&webView4);
                     ComPtr<ICoreWebView2Settings> settings;
                     if (SUCCEEDED(webView->get_Settings(&settings)) && settings) {
                         settings->put_AreDefaultContextMenusEnabled(TRUE);
@@ -200,7 +202,8 @@ struct WebView::Impl
                     args->put_Response(response.Get());
                 return S_OK;
             }).Get(), &token);
-        webView->add_DownloadStarting(Callback<ICoreWebView2DownloadStartingEventHandler>(
+        if (!webView4) return;
+        webView4->add_DownloadStarting(Callback<ICoreWebView2DownloadStartingEventHandler>(
             [this, guard](ICoreWebView2 *, ICoreWebView2DownloadStartingEventArgs *args) -> HRESULT {
                 if (!guard) return S_OK;
                 LPWSTR name = nullptr;

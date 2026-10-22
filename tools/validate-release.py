@@ -118,7 +118,16 @@ def isolated_test_run(binary, env, output):
     (output / "tests.txt").write_text("".join(text_parts))
     if failed:
         unique = ", ".join(dict.fromkeys(failed))
-        raise RuntimeError(f"Falharam testes isolados: {unique}")
+        details = []
+        for function in dict.fromkeys(failed):
+            text_log = output / "isolated-tests" / f"{function}.txt"
+            process_log = output / "isolated-tests" / f"{function}.process.log"
+            for path in (text_log, process_log):
+                if path.exists():
+                    lines = path.read_text(errors="replace").splitlines()
+                    if lines:
+                        details.append(f"\n{function} — {path.name}:\n" + "\n".join(lines[-20:]))
+        raise RuntimeError(f"Falharam testes isolados: {unique}" + "".join(details))
 
 
 def test_counts(path):

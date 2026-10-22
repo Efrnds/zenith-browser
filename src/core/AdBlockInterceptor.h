@@ -4,7 +4,6 @@
 #include <QStringList>
 #include <QUrl>
 
-#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -45,5 +44,5 @@ private:
 
     std::atomic_bool enabled_ {true};
     std::atomic<quint64> blockedCount_ {0};
-    std::atomic<std::shared_ptr<const Rules>> rules_;
+    std::shared_ptr<const Rules> rules_;
 };

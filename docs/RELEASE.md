@@ -7,18 +7,19 @@ instalados. Veja a matriz de alvos em [PLATAFORMAS.md](PLATAFORMAS.md).
 ## Fluxo do GitHub
 
 O arquivo `.github/workflows/release.yml` responde a tags `v*` e tenta gerar
-TGZ, Flatpak e AppImage no Linux, ZIP no Windows e DMG no macOS:
+TGZ, Flatpak e AppImage no Linux, instaladores `.exe` e `.msi` no Windows e
+DMG no macOS:
 
 1. Compila Release e confere se a tag coincide com `zenith-version.txt`, gerado
    pelo CMake. Uma tag diferente da versão do código interrompe o fluxo.
 2. Roda testes de unidade e integração em Xvfb com `ZENITH_REQUIRE_DISPLAY=1`.
    Isso impede que a ausência de display transforme a rodada gráfica em sucesso.
 3. Executa o smoke test em perfil temporário e testes com ASan/UBSan.
-4. Gera e testa os pacotes Linux (TGZ, Flatpak e AppImage), além de tentar
-   compilar e empacotar Windows e macOS. Cada job disponibiliza seus artefatos
-   e checksums.
+4. Gera e testa os pacotes Linux (TGZ, Flatpak e AppImage), os instaladores
+   Windows NSIS (`.exe`) e MSI (`.msi`) para x64/ARM64 e o DMG do macOS. Cada
+   job disponibiliza seus artefatos e checksums.
 5. Só inicia a publicação quando os três jobs de plataforma passam. O job
-   final confere os checksums e exige os cinco formatos; qualquer falha impede
+   final confere os checksums e exige cada formato e arquitetura; qualquer falha impede
    a publicação. Tags com sufixo são publicadas como pré-lançamento. Apenas
    esse job recebe `contents: write`.
 
@@ -30,12 +31,10 @@ git tag -a v1.0.0-rc.4 -m 'Zenith 1.0.0-rc.4'
 git push origin v1.0.0-rc.4
 ```
 
-Esses comandos não foram executados nesta revisão. O workflow foi preparado
-localmente; seu resultado só pode ser confirmado depois da execução no GitHub.
-A versão atual ainda exige WebKitGTK e X11 diretamente, então os jobs
-Windows/macOS devem falhar na configuração até existirem backends WebView2 e
-WKWebView. Esse bloqueio é intencional: enquanto faltar qualquer alvo, a
-release não será publicada. O comportamento de `--verify-tag` e `--prerelease` segue o
+O build desktop Windows x86 não é incluído: Qt 6.8 não oferece esse alvo
+desktop; as matrizes x64 e ARM64 são as arquiteturas disponíveis. Os resultados
+dos instaladores e ports nativos ainda precisam ser confirmados no Actions.
+O comportamento de `--verify-tag` e `--prerelease` segue o
 [manual do GitHub CLI](https://cli.github.com/manual/gh_release_create).
 As permissões seguem a
 [documentação do GITHUB_TOKEN](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token).
@@ -124,8 +123,8 @@ git push origin v1.0.0
 ```
 
 O Actions publica automaticamente somente depois de todos os builds e testes
-passarem. Até os ports nativos de Windows/macOS serem implementados, a tag
-estável não poderá ser publicada por esse fluxo.
+passarem. Até os builds e testes gráficos de todas as plataformas passarem no
+Actions, a tag estável não poderá ser publicada por esse fluxo.
 
 ## Escopo desta candidata
 

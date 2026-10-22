@@ -77,9 +77,19 @@ jobs:
           path: build/validation/
 
   windows:
-    name: Windows (WebView2)
+    name: Windows ${{ matrix.arch }} (WebView2)
     runs-on: windows-2022
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            qt_arch: win64_msvc2022_64
+            vs_arch: x64
+          - arch: arm64
+            qt_arch: win64_msvc2022_arm64
+            vs_arch: ARM64
     steps:
       - uses: actions/checkout@v4
       - name: Install WebView2 SDK
@@ -96,7 +106,8 @@ jobs:
           Move-Item -Path $package -Destination $archive
           Expand-Archive -Path $archive -DestinationPath webview2-sdk -Force
           if (!(Test-Path 'webview2-sdk/build/native/include/WebView2.h')) { throw 'WebView2 headers missing from NuGet package' }
-          if (!(Test-Path 'webview2-sdk/build/native/x64/WebView2LoaderStatic.lib')) { throw 'WebView2 x64 loader missing from NuGet package' }
+          $loader = "webview2-sdk/build/native/${{ matrix.arch }}/WebView2LoaderStatic.lib"
+          if (!(Test-Path $loader)) { throw "WebView2 loader missing from NuGet package: $loader" }
       - name: Install WebView2 Runtime
         shell: pwsh
         run: |
@@ -109,34 +120,41 @@ jobs:
           version: '6.8.3'
           host: windows
           target: desktop
-          arch: win64_msvc2022_64
+          arch: ${{ matrix.qt_arch }}
           archives: qtbase qtsvg
           cache: true
+      - name: Install installer toolchains
+        shell: pwsh
+        run: choco install nsis wixtoolset --yes --no-progress
       - name: Configure
         shell: pwsh
         run: |
           $webview2Sdk = Join-Path $env:GITHUB_WORKSPACE 'webview2-sdk'
-          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=OFF "-DWEBVIEW2_SDK_DIR=$webview2Sdk"
+          cmake -S . -B build -G "Visual Studio 17 2022" -A ${{ matrix.vs_arch }} -DBUILD_TESTING=OFF "-DWEBVIEW2_SDK_DIR=$webview2Sdk"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build, deploy Qt, and smoke test
+      - name: Build, deploy Qt, smoke test, and package
         shell: pwsh
         run: |
           cmake --build build --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --install build --config Release --prefix build/stage
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          windeployqt --release --compiler-runtime build/stage/bin/zenith-browser.exe
+          if ('${{ matrix.arch }}' -eq 'x64') {
+            & ".\build\stage\bin\zenith-browser.exe" --version
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & ".\build\stage\bin\zenith-browser.exe" --private --smoke-test
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          cpack --config build/CPackConfig.cmake -B build/packages
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ".\build\stage\bin\zenith-browser.exe" --version
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ".\build\stage\bin\zenith-browser.exe" --private --smoke-test
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Compress-Archive -Path build/stage/* -DestinationPath build/ZenithBrowser-Windows-x64.zip -Force
+          $checksums = Get-ChildItem build/packages -File | Get-FileHash -Algorithm SHA256
+          $checksumLines = $checksums | ForEach-Object { "$($_.Hash.ToLower())  $([System.IO.Path]::GetFileName($_.Path))" }
+          Set-Content -Path build/packages/SHA256SUMS-windows-${{ matrix.arch }} -Value $checksumLines -Encoding ascii
       - uses: actions/upload-artifact@v4
         with:
-          name: zenith-windows
+          name: zenith-windows-${{ matrix.arch }}
           if-no-files-found: error
-          path: build/ZenithBrowser-Windows-x64.zip
+          path: build/packages/*
 
   macos:
     name: macOS (WKWebView)

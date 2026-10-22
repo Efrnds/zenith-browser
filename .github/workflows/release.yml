@@ -100,9 +100,19 @@ jobs:
             sanitize/validation/
 
   windows:
-    name: Windows (ZIP)
+    name: Windows ${{ matrix.arch }} (EXE, MSI)
     runs-on: windows-2022
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            qt_arch: win64_msvc2022_64
+            vs_arch: x64
+          - arch: arm64
+            qt_arch: win64_msvc2022_arm64
+            vs_arch: ARM64
     steps:
       - uses: actions/checkout@v4
       - name: Install WebView2 SDK
@@ -119,43 +129,57 @@ jobs:
           Move-Item -Path $package -Destination $archive
           Expand-Archive -Path $archive -DestinationPath webview2-sdk -Force
           if (!(Test-Path 'webview2-sdk/build/native/include/WebView2.h')) { throw 'WebView2 headers missing from NuGet package' }
-          if (!(Test-Path 'webview2-sdk/build/native/x64/WebView2LoaderStatic.lib')) { throw 'WebView2 x64 loader missing from NuGet package' }
+          $loader = "webview2-sdk/build/native/${{ matrix.arch }}/WebView2LoaderStatic.lib"
+          if (!(Test-Path $loader)) { throw "WebView2 loader missing from NuGet package: $loader" }
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.3'
           host: windows
           target: desktop
-          arch: win64_msvc2022_64
+          arch: ${{ matrix.qt_arch }}
           archives: qtbase qtsvg
           cache: true
+      - name: Install installer toolchains
+        shell: pwsh
+        run: choco install nsis wixtoolset --yes --no-progress
+      - name: Install WebView2 Runtime
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile WebView2RuntimeInstaller.exe
+          $installer = Start-Process -FilePath "$PWD/WebView2RuntimeInstaller.exe" -ArgumentList '/silent', '/install' -Wait -PassThru
+          if ($installer.ExitCode -ne 0 -and $installer.ExitCode -ne 3010) { throw "WebView2 Runtime installation failed: $($installer.ExitCode)" }
       - name: Configure and verify tag
         shell: pwsh
         run: |
-          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=OFF -DWEBVIEW2_SDK_DIR="$PWD/webview2-sdk"
+          cmake -S . -B build -G "Visual Studio 17 2022" -A ${{ matrix.vs_arch }} -DBUILD_TESTING=OFF -DWEBVIEW2_SDK_DIR="$PWD/webview2-sdk"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $version = Get-Content build/zenith-version.txt -Raw
           if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$($version.Trim())") { throw "Tag does not match project version: $version" }
-      - name: Build and package
+      - name: Build, smoke test, and create EXE/MSI installers
         shell: pwsh
         run: |
           cmake --build build --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --install build --config Release --prefix build/stage
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          windeployqt --release --compiler-runtime build/stage/bin/zenith-browser.exe
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ".\build\stage\bin\zenith-browser.exe" --version
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ".\build\stage\bin\zenith-browser.exe" --private --smoke-test
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ('${{ matrix.arch }}' -eq 'x64') {
+            & ".\build\stage\bin\zenith-browser.exe" --version
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & ".\build\stage\bin\zenith-browser.exe" --private --smoke-test
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           New-Item -ItemType Directory -Force build/packages | Out-Null
           $version = (Get-Content build/zenith-version.txt -Raw).Trim()
-          Compress-Archive -Path build/stage/* -DestinationPath "build/packages/ZenithBrowser-$version-Windows-x64.zip" -Force
-          Get-FileHash build/packages/* -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([System.IO.Path]::GetFileName($_.Path))" } | Set-Content build/packages/SHA256SUMS-windows
+          cpack --config build/CPackConfig.cmake -B build/packages
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $checksums = Get-ChildItem build/packages -File | Get-FileHash -Algorithm SHA256
+          $checksumLines = $checksums | ForEach-Object { "$($_.Hash.ToLower())  $([System.IO.Path]::GetFileName($_.Path))" }
+          Set-Content -Path build/packages/SHA256SUMS-windows-${{ matrix.arch }} -Value $checksumLines -Encoding ascii
       - uses: actions/upload-artifact@v4
         with:
-          name: release-windows
+          name: release-windows-${{ matrix.arch }}
           if-no-files-found: error
           path: build/packages/*
 
@@ -210,13 +234,17 @@ jobs:
           merge-multiple: false
       - name: Verify every package checksum
         run: |
-          for platform in linux windows macos; do
+          for platform in linux macos; do
             (cd "artifacts/release-${platform}" && sha256sum --check "SHA256SUMS-${platform}")
+          done
+          for arch in x64 arm64; do
+            (cd "artifacts/release-windows-${arch}" && sha256sum --check "SHA256SUMS-windows-${arch}")
+            test -n "$(find "artifacts/release-windows-${arch}" -maxdepth 1 -name '*.exe' -print -quit)"
+            test -n "$(find "artifacts/release-windows-${arch}" -maxdepth 1 -name '*.msi' -print -quit)"
           done
           test -n "$(find artifacts/release-linux -maxdepth 1 -name '*.tar.gz' -print -quit)"
           test -n "$(find artifacts/release-linux -maxdepth 1 -name '*.flatpak' -print -quit)"
           test -n "$(find artifacts/release-linux -maxdepth 1 -name '*.AppImage' -print -quit)"
-          test -n "$(find artifacts/release-windows -maxdepth 1 -name '*.zip' -print -quit)"
           test -n "$(find artifacts/release-macos -maxdepth 1 -name '*.dmg' -print -quit)"
       - name: Publish release
         env:
@@ -227,7 +255,8 @@ jobs:
           release_flags=()
           if [[ "$RELEASE_TAG" == *-* ]]; then release_flags+=(--prerelease); fi
           assets=(artifacts/release-linux/ZenithBrowser-* artifacts/release-linux/SHA256SUMS-linux \
-            artifacts/release-windows/ZenithBrowser-* artifacts/release-windows/SHA256SUMS-windows \
+            artifacts/release-windows-x64/ZenithBrowser-* artifacts/release-windows-x64/SHA256SUMS-windows-x64 \
+            artifacts/release-windows-arm64/ZenithBrowser-* artifacts/release-windows-arm64/SHA256SUMS-windows-arm64 \
             artifacts/release-macos/ZenithBrowser-* artifacts/release-macos/SHA256SUMS-macos)
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber

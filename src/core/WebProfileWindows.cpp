@@ -15,8 +15,11 @@
 #undef slots
 #include <windows.h>
 #include <wrl.h>
+#pragma push_macro("__has_attribute")
+#undef __has_attribute
 #include <WebView2.h>
 #include <WebView2EnvironmentOptions.h>
+#pragma pop_macro("__has_attribute")
 
 using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;

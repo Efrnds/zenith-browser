@@ -7,6 +7,7 @@
 #include <QRegularExpression>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 
 AdBlockInterceptor::AdBlockInterceptor(QObject *parent)
@@ -90,7 +91,8 @@ void AdBlockInterceptor::setRules(const QStringList &blockedDomains,
     rules->allowedDomains = compile(allowedDomains);
     rules->blockedNames = blockedDomains;
     rules->allowedNames = allowedDomains;
-    rules_.store(std::move(rules), std::memory_order_release);
+    std::atomic_store_explicit(&rules_, std::shared_ptr<const Rules>(std::move(rules)),
+                               std::memory_order_release);
     emit rulesChanged();
 }
 
@@ -104,7 +106,8 @@ void AdBlockInterceptor::setCompiledRules(std::vector<quint64> blocked,
     auto rules = std::make_shared<Rules>();
     rules->blockedDomains = std::move(blocked);
     rules->allowedDomains = std::move(allowed);
-    rules_.store(std::move(rules), std::memory_order_release);
+    std::atomic_store_explicit(&rules_, std::shared_ptr<const Rules>(std::move(rules)),
+                               std::memory_order_release);
     emit rulesChanged();
 }
 
@@ -125,7 +128,7 @@ QByteArray AdBlockInterceptor::contentFilter() const
         domain.replace(".", "\\.");
         return QStringLiteral("^https?://([^/]+\\.)?") + domain + QStringLiteral("[/:]");
     };
-    const auto rules = rules_.load(std::memory_order_acquire);
+    const auto rules = std::atomic_load_explicit(&rules_, std::memory_order_acquire);
     if (rules) {
         for (const QString &domain : rules->blockedNames) {
             const QString pattern = domainPattern(domain);
@@ -164,7 +167,7 @@ quint64 AdBlockInterceptor::blockedCount() const
 
 qsizetype AdBlockInterceptor::ruleCount() const
 {
-    const auto rules = rules_.load(std::memory_order_acquire);
+    const auto rules = std::atomic_load_explicit(&rules_, std::memory_order_acquire);
     return rules ? static_cast<qsizetype>(rules->blockedDomains.size()) : 0;
 }
 
@@ -201,7 +204,7 @@ bool AdBlockInterceptor::wouldBlock(const QUrl &url, const bool mainFrame) const
             || path.contains(QStringLiteral("/adserver/"))
             || path.contains(QStringLiteral("/advertisement/"))
             || path.endsWith(QStringLiteral("/ads.js")));
-    return isBlockedHost(host, rules_.load(std::memory_order_acquire)) || blockedPath;
+    return isBlockedHost(host, std::atomic_load_explicit(&rules_, std::memory_order_acquire)) || blockedPath;
 }
 
 bool AdBlockInterceptor::isBlockedHost(

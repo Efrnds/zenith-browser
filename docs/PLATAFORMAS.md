@@ -12,13 +12,15 @@ plataforma.
 
 ## Windows
 
-- Requer Qt 6.4+, Visual Studio 2022 x64, o pacote NuGet
+- Requer Qt 6.8+, Visual Studio 2022, o pacote NuGet
   `Microsoft.Web.WebView2` e o runtime Evergreen WebView2 instalado na máquina.
 - Configure com `-DWEBVIEW2_SDK_DIR=<diretório-do-pacote-NuGet>`; o caminho deve
   conter `build/native/include/WebView2.h` e
-  `build/native/x64/WebView2LoaderStatic.lib`.
-- O workflow baixa o SDK fixado, configura o CMake, compila, executa `--version`
-  e um smoke test privado, depois empacota os binários Qt num ZIP.
+  `build/native/x64/WebView2LoaderStatic.lib` ou
+  `build/native/arm64/WebView2LoaderStatic.lib`, conforme a arquitetura.
+- A release gera instaladores NSIS (`.exe`) e Windows Installer (`.msi`) para
+  x64 e ARM64. O build desktop x86 não é suportado pelo Qt 6.8 usado pelo
+  projeto; por isso não há pacote x86.
 
 ## macOS
 
