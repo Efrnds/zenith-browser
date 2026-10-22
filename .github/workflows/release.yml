@@ -22,9 +22,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build pkg-config qt6-base-dev libqt6svg6-dev libwebkit2gtk-4.1-dev libsecret-1-dev libx11-dev xvfb dbus-x11 libxcb-cursor0 flatpak flatpak-builder file libfuse2t64
+        timeout-minutes: 20
+        run: bash tools/install-linux-deps.sh release
       - name: Configure and verify tag
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
@@ -154,6 +153,10 @@ jobs:
           arch: ${{ matrix.qt_arch }}
           archives: qtbase qtsvg
           cache: true
+      - name: Prepare ARM64 Qt deployment paths
+        if: matrix.arch == 'arm64'
+        shell: pwsh
+        run: ./tools/prepare-qt-arm64-deploy.ps1
       - name: Install installer toolchains
         shell: pwsh
         run: choco install nsis wixtoolset --yes --no-progress

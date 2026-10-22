@@ -1,5 +1,6 @@
 #include "core/WebView.h"
 #include "core/WebProfile.h"
+#include "core/BrowserData.h"
 #include "core/DownloadManager.h"
 #include "core/AdBlockInterceptor.h"
 
@@ -26,6 +27,7 @@
 #import <WebKit/WKContentWorld.h>
 #import <WebKit/WKNavigationAction.h>
 #import <WebKit/WKNavigationDelegate.h>
+#import <WebKit/WKPreferences.h>
 #import <WebKit/WKScriptMessage.h>
 #import <WebKit/WKScriptMessageHandlerWithReply.h>
 #import <WebKit/WKUIDelegate.h>
@@ -121,7 +123,8 @@ completionHandler:(void (^)(NSString *))completionHandler
 {
     Q_UNUSED(userContentController);
     if (!owner) { replyHandler(nil, nil); return; }
-    const QString payload = QString::fromUtf8(message.body.description.UTF8String ?: "");
+    NSString *bodyText = [message.body description];
+    const QString payload = QString::fromUtf8(bodyText.UTF8String ?: "");
     const QString reply = owner->dispatchPlatformMessage(payload);
     if (reply.isEmpty()) replyHandler(nil, nil);
     else replyHandler([NSString stringWithUTF8String:reply.toUtf8().constData()], nil);
