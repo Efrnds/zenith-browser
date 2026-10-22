@@ -16,6 +16,6 @@ fi
 apt_options=(-o Acquire::Retries=1 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
 sudo apt-get "${apt_options[@]}" update
 sudo apt-get "${apt_options[@]}" install -y --no-install-recommends \
-  cmake ninja-build pkg-config qt6-base-dev libqt6svg6-dev \
+  cmake ninja-build pkg-config qt6-base-dev libqt6svg6-dev libqt6sql6-sqlite \
   libwebkit2gtk-4.1-dev libsecret-1-dev libx11-dev xvfb dbus-x11 \
   libxcb-cursor0 "${extra[@]}"
