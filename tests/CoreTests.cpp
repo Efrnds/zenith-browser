@@ -71,6 +71,7 @@
 #include <QJsonObject>
 #include <QSaveFile>
 #include <QClipboard>
+#include <QCursor>
 #include <dlfcn.h>
 
 #undef signals
@@ -136,9 +137,11 @@ private slots:
     void searchesAndRefreshesPreferences();
     void customizesBrowserDimensions();
     void embedsFindBar();
+    void compactSidebarTracksPointerAfterTabChanges();
     void embedsBrowserTools();
     void preservesAutomaticDownloadNames();
     void handlesFailedClipboardTargets();
+    void defersWebViewKeySinkDispatch();
     void pastesIntoNativeInputs();
     void opensMiddleClickInBackground();
     void configuresWebRendering();
@@ -2216,6 +2219,28 @@ void CoreTests::embedsBrowserTools()
     window.close();
 }
 
+void CoreTests::compactSidebarTracksPointerAfterTabChanges()
+{
+    if (!graphicalTests) QSKIP("Compact sidebar integration requires X11");
+    MainWindow window(true);
+    window.show();
+    window.activateWindow();
+    QTest::qWait(200);
+    auto *sidebar = window.findChild<Sidebar *>("sidebar");
+    QVERIFY(sidebar);
+    auto *urlBar = window.findChild<UrlBar *>();
+    QVERIFY(urlBar);
+    QVERIFY(QMetaObject::invokeMethod(urlBar, "compactToggled"));
+    QTRY_VERIFY_WITH_TIMEOUT(!sidebar->isVisible(), 3000);
+
+    QCursor::setPos(window.mapToGlobal(QPoint(window.width() / 2, window.height() / 2)));
+    QTest::keyClick(&window, Qt::Key_T, Qt::ControlModifier);
+    QTRY_VERIFY_WITH_TIMEOUT(!sidebar->isVisible(), 1500);
+    QTest::keyClick(&window, Qt::Key_Tab, Qt::ControlModifier);
+    QTRY_VERIFY_WITH_TIMEOUT(!sidebar->isVisible(), 1500);
+    window.close();
+}
+
 void CoreTests::preservesAutomaticDownloadNames()
 {
     QTemporaryDir dir;
@@ -2268,6 +2293,47 @@ void CoreTests::handlesFailedClipboardTargets()
     QCOMPARE(result.count, 0);
     QVERIFY(result.empty);
     QVERIFY(dlsym(RTLD_DEFAULT, "gtk_clipboard_request_targets") == reinterpret_cast<void *>(&gtk_clipboard_request_targets));
+}
+
+void CoreTests::defersWebViewKeySinkDispatch()
+{
+    QWidget context;
+    auto *layout = new QVBoxLayout(&context);
+    UrlBar address(&context);
+    layout->addWidget(&address);
+    context.resize(800, 80);
+    context.show();
+    address.focusAddress();
+    auto *input = address.findChild<QLineEdit *>("addressInput");
+    QVERIFY(input);
+    QApplication::clipboard()->setText(QStringLiteral("texto colado fora do callback GTK"));
+    bool delivered = false;
+    int receivedKey = 0;
+    Qt::KeyboardModifiers receivedModifiers;
+    QString receivedText;
+    WebView::setKeySink([&](int key, Qt::KeyboardModifiers modifiers, const QString &text) -> bool {
+        delivered = true;
+        receivedKey = key;
+        receivedModifiers = modifiers;
+        receivedText = text;
+        address.injectKey(key, modifiers, text);
+        return true;
+    });
+    const auto clearSink = qScopeGuard([] { WebView::setKeySink({}); });
+
+    QVERIFY(WebView::queueKeyToSink(&context, Qt::Key_V, Qt::ControlModifier, QStringLiteral("v")));
+    QVERIFY(!delivered);
+    QTRY_VERIFY(delivered);
+    QCOMPARE(receivedKey, int(Qt::Key_V));
+    QCOMPARE(receivedModifiers, Qt::KeyboardModifiers(Qt::ControlModifier));
+    QCOMPARE(receivedText, QStringLiteral("v"));
+    QCOMPARE(input->text(), QStringLiteral("texto colado fora do callback GTK"));
+
+    delivered = false;
+    QVERIFY(WebView::queueKeyToSink(&context, Qt::Key_V, Qt::ControlModifier, QStringLiteral("v")));
+    WebView::setKeySink({});
+    QCoreApplication::processEvents();
+    QVERIFY(!delivered);
 }
 
 void CoreTests::pastesIntoNativeInputs()

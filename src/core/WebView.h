@@ -60,6 +60,8 @@ public:
 
     using KeySink = std::function<bool(int key, Qt::KeyboardModifiers modifiers, const QString &text)>;
     static void setKeySink(KeySink sink, std::function<void()> cancelled = {});
+    static bool queueKeyToSink(QObject *context, int key,
+                               Qt::KeyboardModifiers modifiers, const QString &text);
 
     [[nodiscard]] QByteArray sessionState() const;
     bool restoreSessionState(const QByteArray &state);

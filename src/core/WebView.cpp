@@ -164,6 +164,7 @@ private Q_SLOTS:
 namespace {
 WebView::KeySink keySink;
 std::function<void()> keySinkCancelled;
+quint64 keySinkRevision = 0;
 
 int qtKeyFromGdk(const guint keyval, QString *text)
 {
@@ -757,8 +758,7 @@ gboolean WebView::Impl::onKeyPress(GtkWidget *, GdkEventKey *event, gpointer use
         return TRUE;
     }
 
-    if (!keySink)
-        return FALSE;
+    auto *view = static_cast<WebView *>(user);
     QString text;
     const int key = qtKeyFromGdk(event->keyval, &text);
     if (key == 0)
@@ -768,14 +768,30 @@ gboolean WebView::Impl::onKeyPress(GtkWidget *, GdkEventKey *event, gpointer use
         modifiers |= Qt::ControlModifier;
     if (shift)
         modifiers |= Qt::ShiftModifier;
-    const auto sink = keySink;
-    return sink && sink(key, modifiers, text) ? TRUE : FALSE;
+    return WebView::queueKeyToSink(view, key, modifiers, text) ? TRUE : FALSE;
 }
 
 void WebView::setKeySink(KeySink sink, std::function<void()> cancelled)
 {
+    ++keySinkRevision;
     keySink = std::move(sink);
     keySinkCancelled = std::move(cancelled);
+}
+
+bool WebView::queueKeyToSink(QObject *context, const int key,
+                             const Qt::KeyboardModifiers modifiers, const QString &text)
+{
+    if (!context || !keySink)
+        return false;
+    const quint64 revision = keySinkRevision;
+    QPointer<QObject> safeContext(context);
+    QMetaObject::invokeMethod(context, [safeContext, revision, key, modifiers, text] {
+        if (!safeContext || revision != keySinkRevision || !keySink)
+            return;
+        const auto sink = keySink;
+        sink(key, modifiers, text);
+    }, Qt::QueuedConnection);
+    return true;
 }
 
 WebView::WebView(WebProfile *profile, QWidget *parent, WebView *opener)
@@ -932,6 +948,7 @@ WebView::WebView(WebProfile *profile, QWidget *parent, WebView *opener)
         emit static_cast<WebView *>(user)->pageFocused();
         if (!keySink && !keySinkCancelled)
             return FALSE;
+        ++keySinkRevision;
         keySink = {};
         auto cancelled = std::move(keySinkCancelled);
         keySinkCancelled = {};

@@ -65,6 +65,7 @@ private:
     void syncFolders();
     void setCompactMode(bool enabled);
     void setCompactSidebarShown(bool shown);
+    void scheduleCompactSidebarRecheck();
     void revealAddressBar();
     void showAddressBar(bool focus);
     void updateShellGeometry();

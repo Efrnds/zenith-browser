@@ -479,7 +479,9 @@ void MainWindow::connectInterface()
             hideSidebarTimer_->start();
     });
     connect(hideSidebarTimer_, &QTimer::timeout, this, [this] {
+        const bool cursorOnSidebar = sidebar_->rect().contains(sidebar_->mapFromGlobal(QCursor::pos()));
         if (QApplication::mouseButtons() != Qt::NoButton || QApplication::activePopupWidget()
+            || cursorOnSidebar
             || (QApplication::focusWidget() && sidebar_->isAncestorOf(QApplication::focusWidget()))) {
             hideSidebarTimer_->start();
             return;
@@ -793,6 +795,7 @@ void MainWindow::activateTab(const int id)
     sidebar_->selectTab(id);
     applyViewLayout();
     scheduleSessionSave();
+    scheduleCompactSidebarRecheck();
 }
 
 void MainWindow::cycleTabs(const int direction)
@@ -883,6 +886,7 @@ void MainWindow::closeTab(const int id)
     applyViewLayout();
     scheduleSessionSave();
     closingTab_ = false;
+    scheduleCompactSidebarRecheck();
 }
 
 void MainWindow::switchWorkspace(const int workspace)
@@ -911,6 +915,7 @@ void MainWindow::switchWorkspace(const int workspace)
     sidebar_->selectTab(currentTabId_);
     applyViewLayout();
     scheduleSessionSave();
+    scheduleCompactSidebarRecheck();
 }
 
 void MainWindow::toggleSplit(const bool enabled)
@@ -1210,6 +1215,13 @@ void MainWindow::setCompactSidebarShown(const bool shown)
         return;
     }
     sidebarSlide_->start();
+}
+
+void MainWindow::scheduleCompactSidebarRecheck()
+{
+    if (!compactMode_ || !hideSidebarTimer_)
+        return;
+    hideSidebarTimer_->start();
 }
 
 void MainWindow::updateShellGeometry()
